@@ -1,0 +1,271 @@
+---
+title: "Clase 6"
+format: html
+editor: visual
+---
+
+## 
+```{r}
+library(tidyverse)
+library(fpp3)
+```
+
+```{r}
+aus_production |> 
+  autoplot(log(Gas))
+```
+Logaritmos no loogra estabilizar la varianza, vamos a probar con BOX COX
+
+```{r}
+gas_lambda <- aus_production |> 
+  features(Gas, features = guerrero) |> 
+  pull()
+gas_lambda
+```
+
+```{r}
+aus_production |> 
+  autoplot(box_cox(Gas, gas_lambda))
+```
+
+Que modelo se utilziaria pra esta serie
+```{r}
+gas_filt <- aus_production |> 
+  model (
+    drift = RW(box_cox(Gas, gas_lambda) ~ drift()),
+    snaive = SNAIVE(box_cox(Gas, gas_lambda))
+  )
+gas_filt
+```
+
+
+vamos a serpar alos datosp
+```{r}
+gas_train <- aus_production |> 
+  filter_index(. ~ "2007 Q2")
+
+gas_train
+
+```
+
+```{r}
+
+```
+
+
+
+```{r}
+gas_lambda <- gas_train |> 
+  features(Gas, features = guerrero) |> 
+  pull()
+gas_lambda
+```
+
+```{r}
+gas_train |> 
+  autoplot(box_cox(Gas, lambda = gas_lambda))
+```
+
+
+```{r}
+aus_production |> 
+  autoplot(box_cox(Gas, gas_lambda))
+```
+
+
+```{r}
+gas_fit<-gas_train|> 
+  model (
+    drift = RW(box_cox(Gas, gas_lambda) ~ drift()),
+    snaive = SNAIVE(box_cox(Gas, gas_lambda)),
+    media = MEAN(box_cox(Gas, gas_lambda))
+  )
+
+gas_fit
+```
+
+
+Vamos a hacer un disgnostico de los residuos, La fuincion adugment() nos eprmite obtener los residuos y otro avalores ajustados delos modelos.
+
+```{r}
+gas_aug <- gas_fit |> 
+  augment()
+gas_aug
+```
+
+Grafica de los residuos de modelos
+```{r}
+#| warning: false
+gas_aug |> 
+  autoplot(.innov) +
+  facet_wrap( ~.model, ncol = 1, scales = "free_y")
+```
+
+```{r}
+gas_aug |> 
+  ACF(.innov) |>
+  autoplot() +
+  facet_wrap(~.model, ncol = 1, scale = "free_y")
+```
+
+```{r}
+gas_aug |> 
+  ggplot(aes(x = .innov, fill = .model)) +
+  geom_histogram() +
+  facet_wrap(~.model, ncol = 1, scales = "free_y")
+```
+
+```{r}
+#| warning: false
+
+gas_fit |> 
+  select(drift) |> 
+  gg_tsresiduals()+
+  ggtitle("Diagnóstico de residuos para el modelo del Drift")
+```
+
+
+```{r}
+gas_fc <- gas_fit |> 
+  forecast(h = "3 years")
+
+gas_fc
+```
+
+
+
+```{r}
+aus_production_recent <- aus_production |> 
+  filter_index("1999 Q1" ~ .)
+```
+
+
+
+```{r}
+gas_fc |> 
+  autoplot(aus_production_recent) +
+  facet_wrap(vars(.model), scale = "free_y", ncol = 1)
+```
+
+
+
+
+
+
+MSE: Error medio cuadratico, elevas al cuadrado y despues los promedias
+Depende de la escala del pronostico RMSE: Se usan la raiz del anterior
+Depende de la escala del pronostico MAE: Error medio absoluto
+Error porcentual: El error lo divides entre el valor
+MAPE: Error porcentual medio absoluto 
+Errores escalados: 
+ 	Si tiene estacionalidad, contra el valor anterior
+ 	Si no tiene estacionalidad, contral el valor estacional anterior
+MASE: Error escalado medio absoluto
+
+
+Ignorar ME y MPE
+
+Se define el mejor modelo con el menor erro
+```{r}
+gas_fc |> Z
+  accuracy(aus_production) |> 
+  arrange(RMSE)
+```
+
+
+gasfit tabla donde se estimaron los modelos en el entrenamiento
+```{r}
+gas_fit |> 
+  accuracy() |> 
+  arrange(RMSE)
+```
+
+
+
+```{r}
+gas_stl <- gas_train |> 
+  model(
+    stl = STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE)
+  ) |> 
+  components()
+
+gas_stl
+
+gas_stl |> 
+  autoplot()
+
+gas_stl |> 
+  ggplot(aes(x = Quarter, y = season_year)) +
+  geom_line() +
+  ggtitle("Componente estacional de la producción de gas")
+
+gas_stl |> 
+  ggplot(aes(x = Quarter, y = season_adjust)) +
+  geom_line() +
+  ggtitle("Serie desestacionalizada de la producción de gas")
+```
+
+```{r}
+gas_dcmp <- gas_train |> 
+  model(
+    dcmp = decomposition_model(                                                   #<1>
+      STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE), #<2>
+      RW(season_adjust ~ drift()),                                                #<3>
+      SNAIVE(season_year)                                                         #<4>
+    )
+  )
+
+gas_dcmp
+
+
+```
+
+
+```{r}
+gas_dcmp |> 
+  select(dcmp) |> 
+  gg_tsresiduals()+
+  ggtitle("Diagnóstico de residuos para el modelo del Ya dividido")
+```
+
+
+
+```{r}
+#| warning: false
+gas_dcmp |> 
+  gg_tsresiduals()
+```
+
+
+Como es menor se rechaza
+```{r}
+gas_dcmp |> 
+  augment() |> 
+  features(.innov, ljung_box, lag = 8)
+```
+
+```{r}
+gas_dcmp |> 
+  accuracy()
+```
+
+
+```{r}
+gas_dcmp_fc <- gas_dcmp |> 
+  forecast(h = "3 years")
+
+gas_dcmp_fc 
+
+gas_dcmp_fc |> 
+  autoplot(aus_production |> filter_index("1999 Q1" ~ .))
+```
+
+
+
+
+
+
+
+
+
+
