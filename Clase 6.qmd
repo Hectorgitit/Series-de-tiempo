@@ -5,6 +5,7 @@ editor: visual
 ---
 
 ## 
+
 ```{r}
 library(tidyverse)
 library(fpp3)
@@ -14,6 +15,7 @@ library(fpp3)
 aus_production |> 
   autoplot(log(Gas))
 ```
+
 Logaritmos no loogra estabilizar la varianza, vamos a probar con BOX COX
 
 ```{r}
@@ -29,6 +31,7 @@ aus_production |>
 ```
 
 Que modelo se utilziaria pra esta serie
+
 ```{r}
 gas_filt <- aus_production |> 
   model (
@@ -38,8 +41,8 @@ gas_filt <- aus_production |>
 gas_filt
 ```
 
-
 vamos a serpar alos datosp
+
 ```{r}
 gas_train <- aus_production |> 
   filter_index(. ~ "2007 Q2")
@@ -51,8 +54,6 @@ gas_train
 ```{r}
 
 ```
-
-
 
 ```{r}
 gas_lambda <- gas_train |> 
@@ -66,12 +67,10 @@ gas_train |>
   autoplot(box_cox(Gas, lambda = gas_lambda))
 ```
 
-
 ```{r}
 aus_production |> 
   autoplot(box_cox(Gas, gas_lambda))
 ```
-
 
 ```{r}
 gas_fit<-gas_train|> 
@@ -84,7 +83,6 @@ gas_fit<-gas_train|>
 gas_fit
 ```
 
-
 Vamos a hacer un disgnostico de los residuos, La fuincion adugment() nos eprmite obtener los residuos y otro avalores ajustados delos modelos.
 
 ```{r}
@@ -94,6 +92,7 @@ gas_aug
 ```
 
 Grafica de los residuos de modelos
+
 ```{r}
 #| warning: false
 gas_aug |> 
@@ -124,7 +123,6 @@ gas_fit |>
   ggtitle("Diagnóstico de residuos para el modelo del Drift")
 ```
 
-
 ```{r}
 gas_fc <- gas_fit |> 
   forecast(h = "3 years")
@@ -132,55 +130,36 @@ gas_fc <- gas_fit |>
 gas_fc
 ```
 
-
-
 ```{r}
-aus_production_recent <- aus_production |> 
-  filter_index("1999 Q1" ~ .)
+aus_prod_recent <- aus_production |> 
+  filter_index("1995 Q1" ~ .)
 ```
-
-
 
 ```{r}
 gas_fc |> 
-  autoplot(aus_production_recent) +
+  autoplot(aus_prod_recent) +
   facet_wrap(vars(.model), scale = "free_y", ncol = 1)
 ```
 
-
-
-
-
-
-MSE: Error medio cuadratico, elevas al cuadrado y despues los promedias
-Depende de la escala del pronostico RMSE: Se usan la raiz del anterior
-Depende de la escala del pronostico MAE: Error medio absoluto
-Error porcentual: El error lo divides entre el valor
-MAPE: Error porcentual medio absoluto 
-Errores escalados: 
- 	Si tiene estacionalidad, contra el valor anterior
- 	Si no tiene estacionalidad, contral el valor estacional anterior
-MASE: Error escalado medio absoluto
-
+MSE: Error medio cuadratico, elevas al cuadrado y despues los promedias Depende de la escala del pronostico RMSE: Se usan la raiz del anterior Depende de la escala del pronostico MAE: Error medio absoluto Error porcentual: El error lo divides entre el valor MAPE: Error porcentual medio absoluto Errores escalados: Si tiene estacionalidad, contra el valor anterior Si no tiene estacionalidad, contral el valor estacional anterior MASE: Error escalado medio absoluto
 
 Ignorar ME y MPE
 
 Se define el mejor modelo con el menor erro
+
 ```{r}
-gas_fc |> Z
+gas_fc |> 
   accuracy(aus_production) |> 
   arrange(RMSE)
 ```
 
-
 gasfit tabla donde se estimaron los modelos en el entrenamiento
+
 ```{r}
 gas_fit |> 
   accuracy() |> 
   arrange(RMSE)
 ```
-
-
 
 ```{r}
 gas_stl <- gas_train |> 
@@ -220,7 +199,6 @@ gas_dcmp
 
 ```
 
-
 ```{r}
 gas_dcmp |> 
   select(dcmp) |> 
@@ -228,16 +206,14 @@ gas_dcmp |>
   ggtitle("Diagnóstico de residuos para el modelo del Ya dividido")
 ```
 
-
-
 ```{r}
 #| warning: false
 gas_dcmp |> 
   gg_tsresiduals()
 ```
 
-
 Como es menor se rechaza
+
 ```{r}
 gas_dcmp |> 
   augment() |> 
@@ -249,7 +225,6 @@ gas_dcmp |>
   accuracy()
 ```
 
-
 ```{r}
 gas_dcmp_fc <- gas_dcmp |> 
   forecast(h = "3 years")
@@ -260,10 +235,215 @@ gas_dcmp_fc |>
   autoplot(aus_production |> filter_index("1999 Q1" ~ .))
 ```
 
+```{r}
+gas_fc_full <- gas_fc |> 
+  full_join(gas_dcmp_fc)
+gas_fc_full
+```
+
+
+```{r}
+gas_fc_full |> 
+  accuracy(aus_production) |> 
+  arrange(RMSE)
+
+gas_fc_full |> 
+  autoplot(aus_production |> filter_index("1999 Q1" ~ .), level = NULL)
+```
+
+
+```{r}
+gas_fit_full <- gas_fit |> #jutas  est  atabla 1 con la de abajo
+  cross_join(gas_dcmp) |> 
+  mutate(combinado = (snaive + dcmp)/2)
+
+gas_fit_full
+
+```
+
+
+
+```{r}
+gas_fcst_full <- gas_fit_full |> 
+  forecast(h = "3 years")
+
+gas_fcst_full |>
+  filter(.model %in% c("dcmp","combinado","snaive")) |> 
+  autoplot(aus_prod_recent, level = NULL)
+
+gas_fcst_full |> 
+  accuracy(aus_production) |> 
+  arrange(RMSE)
+```
 
 
 
 
+
+```{r}
+gas_fcst_full <- gas_fit_full |> 
+  forecast(h = "3 years")
+
+gas_fcst_full |>
+  autoplot(aus_production |> filter_index("1999 Q1" ~ .), level = NULL)
+
+gas_fcst_full |>
+  filter(.model == "combinado") |>
+  autoplot(aus_production |> filter_index("1999 Q1" ~ .))
+```
+
+
+```{r}
+ses <-  gas_train |> 
+  model(
+    ses = ETS(Gas ~  error("A") + trend("N") + season("N"))
+  )
+  
+```
+
+
+
+```{r}
+report(ses)
+```
+
+```{r}
+ses |> 
+  forecast(h = "3 years") |> 
+  autoplot(aus_prod_recent
+           )
+```
+
+
+```{r}
+holt <- gas_train |> 
+  model(
+    holt = ETS (Gas ~ error("A") + trend("A") + season("N"))
+  )
+holt
+```
+
+```{r}
+report(holt)
+```
+
+
+```{r}
+holt |> 
+  forecast(h= "3 years") |> 
+  autoplot(aus_prod_recent
+           )
+```
+
+
+```{r}
+gas_dcmp_holt <- gas_train |> 
+  model(
+    stlf_ets = decomposition_model(
+      STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic")),
+      ETS(season_adjust ~ error("A") + trend("Ad") + season("N")),
+      SNAIVE(season_year)
+    )
+  )
+
+gas_fit_full2 <- gas_fit_full |> 
+  cross_join(gas_dcmp_holt)
+
+gas_fcst_full2 <- gas_fit_full2 |> 
+  forecast(h = "3 years")
+
+p <- gas_fcst_full2 |> 
+  autoplot(aus_prod_recent, level = NULL)
+
+plotly::ggplotly(p)
+
+gas_fcst_full2 |> 
+  accuracy(aus_production) |> 
+  arrange(RMSE)
+
+```
+
+
+```{r}
+ets_trend <- gas_train |> 
+  model(
+    holt = ETS(Gas ~ error("A") + trend("A") + season("N")),
+    tend_amort = ETS(Gas ~ error("A") + trend("Ad") + season("N"))
+  )
+
+ets_trend
+
+ets_trend |> 
+  select(tend_amort) |> 
+  report()
+
+ets_trend |> 
+  forecast(h = "3 years") |> 
+  autoplot(aus_prod_recent, level = NULL)
+```
+
+
+### Damped trend (Tendenciia amortiguada)
+
+```{r}
+gas_train |> 
+  autoplot(Gas)
+
+hw <- gas_train |> 
+  model(
+    hw = ETS(Gas ~ error("M") + trend("Ad", phi = 0.8) + season("M"))
+  )
+
+report(hw)
+
+hw |> 
+  forecast(h = "3 years") |> 
+  autoplot(aus_prod_recent)
+```
+
+
+```{r}
+STLF <-  decomposition_model(
+  STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE),
+      RW(season_adjust ~ drift())
+)
+
+STLF_ets <- decomposition_model(
+  STL(box_cox(Gas, gas_lambda) ~ season(window = "periodic"), robust = TRUE),
+  ETS(season_adjust ~ error("A") + trend("Ad") + season("N"))
+)
+      
+
+gas_fit_todos <- gas_train |> 
+  model(
+    hw = ETS(Gas ~ error("M") + trend("Ad", phi = 0.8) + season("M")),
+    snaive = SNAIVE(box_cox(Gas, lambda = gas_lambda)),
+    hw_boxcox = ETS(box_cox(Gas, lambda = gas_lambda) ~ error("A") + trend("Ad") + season("A")),
+    stlf = STLF,
+    stlf_ets = STLF_ets
+  )
+
+gas_fit_todos
+```
+
+
+```{r}
+gas_fc_todos <- gas_fit_todos |> 
+  mutate(
+    top2 = (snaive + hw)/2,
+    todos = (snaive + hw + stlf_ets + hw_boxcox + stlf)/5
+  ) |> 
+  forecast(h = "3 years")
+
+gas_fc_todos |> 
+  accuracy(aus_production) |> 
+  arrange(RMSE)
+
+p <- gas_fc_todos |> 
+  autoplot(aus_prod_recent, level = NULL)
+
+plotly::ggplotly(p)
+```
 
 
 
