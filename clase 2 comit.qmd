@@ -59,6 +59,89 @@ medicinas |>
 ```
 
 
+```{r}
+medicinas_dcmp <- medicinas |>
+  model(dcmp_clasica_mult = classical_decomposition(Cost, type = "multiplicative"))
+
+dcmp_clasica_add <- medicinas |>
+  model(classical_decomposition(Cost, type = "additive")) |>
+  components()
+
+medicinas_dcmp
+
+medicinas_dcmp |>
+  components() |>
+  ggplot(aes(x = fecha)) +
+  geom_line(aes(y = Cost), color = "grey") +
+  geom_line(aes(y = season_adjust), color = "blue")
+
+medicinas_dcmp |>
+  components() |>
+  autoplot()
+
+```
+
+```{r}
+medicinas |>
+  autoplot(Cost)
+
+medicinas |>
+  autoplot(log(Cost))
+
+lambda_med <- medicinas |>
+  features(Cost, features = guerrero) |>
+  pull(lambda_guerrero)
+
+medicinas |>
+  autoplot(box_cox(Cost, lambda = lambda_med))
+```
+
+
+```{r}
+medicinas_stl <- medicinas |> 
+  model(stl = STL(log(Cost) ~ trend(window =21) + season(window = "periodic"))) |> 
+  components()
+
+medicinas_stl |> 
+  autoplot()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
