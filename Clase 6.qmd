@@ -369,6 +369,10 @@ ets_trend |>
 
 ### Damped trend (Tendenciia amortiguada)
 
+
+
+
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```{r}
 gas_train |> 
   autoplot(Gas)
