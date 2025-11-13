@@ -1,0 +1,519 @@
+---
+title: "Serie de electricidad"
+format: 
+  revealjs:
+    scrollable: true
+    incremental: true
+    smaller: true
+    theme: default
+    embed-resources: true
+execute:
+  echo: true
+  output-location: column-fragment
+---
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# --- ARIMA por serie + LM (fórmula automática según columnas disponibles) ---
+
+library(tidyquant)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(glue)
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+h_meses <- 36
+y_var   <- "IPN221114T8N"   
+escala_opt <- 0.97          
+escala_pes <- 1.03           
+```
+
+
+
+¿Qué buscamos pronosticar?
+
+
+
+
+## Serie IPN221114T8N
+
+Volumen de la generación eléctrica, pero **¿De qué fuentes?**
+
+De las NAICS (North American Industry Classification System)
+NAICS 221114–221118:
+
+-221114 **Solar**
+
+-221115 **Eólica**
+
+-221116 **Geotérmica**
+
+-221117 **Biomasa**
+
+-221118 **Otras**
+
+Es decir, no incluye: 
+
+-221112 Fossil Fuel Electric Power Generation (**carbón**, **gas natural**, **fuel-oil**)
+
+-221113 **Nuclear**
+
+-221111 **Hidroeléctrica** (renovable, pero va aparte en NAICS)
+
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.show: hold
+
+# 1) Descargar y preparar
+ip_renov_us_raw <- tq_get("IPN221114T8N", get = "economic.data") |>
+  transmute(mes = yearmonth(date), valor = price)
+
+ip_renov_us <- ip_renov_us_raw |>
+  group_by(mes) |>
+  summarise(valor = mean(valor, na.rm = TRUE), .groups = "drop") |>
+  as_tsibble(index = mes)
+
+# 2) Calidad de datos (sin imprimir en el render)
+invisible(glimpse(ip_renov_us))
+invisible(interval(ip_renov_us))
+invisible(has_gaps(ip_renov_us)); invisible(count_gaps(ip_renov_us))
+
+# 3) Serie, STL y estacionalidad (asignar y luego imprimir)
+
+# Serie
+p1 <- autoplot(ip_renov_us, valor) +
+  labs(title = "IPN221114T8N – índice (2017=100, no ajustado)", x = NULL, y = NULL)
+print(p1)
+
+# STL
+stl_comps <- ip_renov_us |>
+  model(STL(valor ~ trend(window = 13) + season(window = "periodic"))) |>
+  components()
+p2 <- autoplot(stl_comps) +
+  labs(title = "Descomposición STL")
+print(p2)
+
+# Estacionalidad por mes
+p3 <- gg_season(ip_renov_us, valor) +
+  labs(title = "Estacionalidad por mes", x = "Mes", y = NULL)
+print(p3)
+
+# 4) Fuerza de tendencia/estacionalidad (calculado pero NO mostrado)
+feats <- ip_renov_us |>
+  features(valor, feat_stl) |>
+  select(trend_strength, seasonal_strength_year)
+invisible(feats)
+
+# Evitar auto-impresión al final del chunk
+invisible(NULL)
+```
+```{r}
+# 2) Calidad de datos
+glimpse(ip_renov_us)
+interval(ip_renov_us)
+has_gaps(ip_renov_us); count_gaps(ip_renov_us)
+
+# 3) Serie, STL y estacionalidad
+autoplot(ip_renov_us, valor) +
+  labs(title = "IPN221114T8N – índice (2017=100, no ajustado)", x = NULL, y = NULL)
+
+ip_renov_us |>
+  model(STL(valor ~ trend(window = 13) + season(window = "periodic"))) |>
+  components() |>
+  autoplot() +
+  labs(title = "Descomposición STL")
+
+gg_season(ip_renov_us, valor) +
+  labs(title = "Estacionalidad por mes", x = "Mes", y = NULL)
+```
+
+
+## ¿Qué sería lo lógico?
+Buscar series que no sean redundantes con energías renovables.
+
+MHHNGSP - **Precio spot del gas natural** en el punto Henry Hub (referencia para EE. UU.).
+
+WPS0554 - **Índice de precios al productor para gas natural** destinado a la generación eléctrica.
+
+NATURALGAS - **Consumo total de gas natural** en EE. UU.
+
+##
+
+DCOILWTICO - **Precio promedio del petróleo crudo** WTI (referencia mundial).
+
+IPUTIL - **Producción industrial real del sector de servicios públicos** (electricidad, agua, gas).
+
+APU000072610 - **Precio promedio minorista de la electricidad** en hogares de EE. UU.
+
+INDPRO - **Producción industrial** total de EE. UU. (todos los sectores).
+
+CPIENGSL - CPI: “Energy Services” (electricidad + gas para el hogar) – **consumidores urbanos**.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# 1) Lista deseada (si alguna no existe en FRED o falla la conexión, la omitiremos)
+vars_fred <- c(
+  "IPN221114T8N",                 # objetivo
+  "MHHNGSP","WPS0554","NATURALGAS","DCOILWTICO","IPUTIL",
+  "GASPRICE","APU000072610","CO2EMISS","INDPRO","TEMPUS","CPIENGSL"
+)
+vars_fred
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# 2) Descargar y mensualizar
+energia_raw <- tq_get(vars_fred, get = "economic.data") |>
+  rename(serie = symbol, valor = price)
+energia_raw
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# 2.1) Reportar qué series sí bajaron y cuáles faltaron
+series_ok  <- energia_raw |> distinct(serie) |> pull(serie)
+series_out <- setdiff(vars_fred, series_ok)
+message("Series descargadas: ", paste(series_ok, collapse = ", "))
+if (length(series_out) > 0) {
+  message("⚠️ No se descargaron (se excluirán): ", paste(series_out, collapse = ", "))
+}
+series_ok
+```
+
+```{r}
+
+energia_mensual_tsb <- energia_raw |>
+  transmute(serie, mes = yearmonth(date), valor) |>
+  group_by(serie, mes) |>
+  summarise(valor = mean(valor, na.rm = TRUE), .groups = "drop") |>
+  as_tsibble(index = mes, key = serie) |>
+  arrange(serie, mes)
+energia_mensual_tsb
+```
+
+```{r}
+# 3) ARIMA independiente por serie
+energia_fit <- energia_mensual_tsb |>
+  model(auto_arima = ARIMA(valor))
+energia_fit
+```
+
+```{r}
+# 4) Fitted a formato wide (una columna por serie)
+energia_ajustada_wide <- energia_fit |>
+  augment() |>
+  select(serie, mes, .fitted) |>
+  rename(valor_ajustado = .fitted) |>
+  pivot_wider(names_from = serie, values_from = valor_ajustado) |>
+  arrange(mes)
+energia_ajustada_wide
+```
+
+```{r}
+
+# 5) Construir fórmula con las columnas realmente disponibles
+disponibles <- names(energia_ajustada_wide)
+stopifnot(y_var %in% disponibles)  # la Y debe existir
+
+candidatas_x <- setdiff(vars_fred, c(y_var, "mes"))
+x_vars <- intersect(candidatas_x, disponibles)
+
+form_str <- paste(y_var, "~", paste(x_vars, collapse = " + "))
+fmla <- as.formula(form_str)
+message("Fórmula usada: ", form_str)
+```
+
+```{r}
+datos_reg <- energia_ajustada_wide |>
+  drop_na()
+
+# Modelo con todo el historial (para ex-ante)
+modelo_reg_all <- lm(fmla, data = datos_reg)
+```
+
+```{r}
+#MHHNGSP - Precio spot del gas natural en el punto Henry Hub (referencia para EE. UU.).
+#WPS0554 - Índice de precios al productor para gas natural destinado a la generación eléctrica.
+#NATURALGAS - Consumo total de gas natural en EE. UU.
+#DCOILWTICO - Precio promedio del petróleo crudo WTI (referencia mundial).
+#IPUTIL - Producción industrial real del sector de servicios públicos (electricidad, agua, gas).
+#APU000072610 - Precio promedio minorista de la electricidad en hogares de EE. UU.
+#INDPRO - Producción industrial total de EE. UU. (todos los sectores).
+```
+
+```{r}
+# 7) Estrellitas, R^2, R^2 ajustado, p-value global
+summary(modelo_reg_all)
+
+```
+
+
+## Eliminamos una variable no significativa
+Optimización 1
+
+```{r}
+var_out <- "NATURALGAS"
+resp <- all.vars(fmla)[1]
+xs   <- setdiff(all.vars(fmla)[-1], var_out)
+fmla <- reformulate(xs, response = resp)
+
+summary(lm(fmla, data = datos_reg))
+```
+
+
+## Eliminamos otra variable no significativa
+Optimización 2
+```{r}
+var_out <- "DCOILWTICO"
+resp <- all.vars(fmla)[1]
+xs   <- setdiff(all.vars(fmla)[-1], var_out)
+fmla <- reformulate(xs, response = resp)
+
+summary(lm(fmla, data = datos_reg))
+```
+
+
+## Eliminamos otra variable no significativa
+Optimización 3
+```{r}
+var_out <- "WPS0554"
+resp <- all.vars(fmla)[1]
+xs   <- setdiff(all.vars(fmla)[-1], var_out)
+fmla <- reformulate(xs, response = resp)
+
+summary(lm(fmla, data = datos_reg))
+```
+
+## Eliminamos ya la última no significativa
+Optimización 4
+
+```{r}
+var_out <- "APU000072610"
+resp <- all.vars(fmla)[1]
+xs   <- setdiff(all.vars(fmla)[-1], var_out)
+fmla <- reformulate(xs, response = resp)
+
+summary(lm(fmla, data = datos_reg))
+```
+## Reflexión
+En el caso de esta regresión en específico solo eliminares el consumo total de gas natural en EU ya que las demas solo reducen el R cuadrado ajustado, lo cual es lo que se puede explicar de la variable a pronosticar.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# (1) Train/Test: 36 meses de test con X observadas
+# ================================
+ultimo_mes <- max(datos_reg$mes)
+corte_test <- ultimo_mes - (h_meses - 1) # 36 meses hacia atrás, inclusive
+
+datos_reg_train <- datos_reg |> filter(mes <  corte_test)
+datos_reg_test  <- datos_reg |> filter(mes >= corte_test)
+
+modelo_reg_train <- lm(fmla, data = datos_reg_train)
+
+# Pronóstico sobre el test usando X observadas
+y_hat_test <- predict(modelo_reg_train, newdata = datos_reg_test)
+
+# Métricas clásicas (FPP3): MAE, RMSE, MAPE
+y_obs_test <- datos_reg_test[[y_var]]
+mae_test  <- mean(abs(y_obs_test - y_hat_test))
+rmse_test <- sqrt(mean((y_obs_test - y_hat_test)^2))
+mape_test <- mean(abs((y_obs_test - y_hat_test) / y_obs_test)) * 100
+
+metricas_test <- tibble::tibble(
+  medida = c("MAE", "RMSE", "MAPE_%"),
+  valor  = c(mae_test, rmse_test, mape_test)
+)
+
+# Serie pronosticada vs observada en test (tsibble)
+test_fc_tsb <- tibble::tibble(
+  mes   = datos_reg_test$mes,
+  y_obs = y_obs_test,
+  y_hat = as.numeric(y_hat_test)
+) |>
+  as_tsibble(index = mes)
+
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# ================================
+# (2) Ex–ante: proyectar X con ARIMA y luego Y por 36 meses
+# ================================
+# Pronóstico ARIMA(h=36) para todas las series -> sacar la MEDIA de la distribución
+energia_fc <- energia_fit |>
+  forecast(h = h_meses) |>
+  mutate(valor_fc = mean(valor)) |>     # <<--- extrae el punto (media) de la distribución
+  as_tibble() |>
+  select(serie, mes, valor_fc) |>
+  arrange(serie, mes)
+
+# Wide: una columna por serie, TODO numérico
+energia_fc_wide <- energia_fc |>
+  pivot_wider(names_from = serie, values_from = valor_fc) |>
+  arrange(mes) |>
+  mutate(across(-mes, as.numeric))      # <<--- por si alguna quedó como list/other
+
+
+
+# Asegurar que las columnas de X requeridas están en el pronóstico
+x_fut_cols <- intersect(x_vars, names(energia_fc_wide))
+stopifnot(length(x_fut_cols) > 0)
+
+# --- ALINEAR FUTURO para evitar el "gap" y NAs al inicio ---
+ultimo_hist <- max(datos_reg$mes)
+
+energia_fc_wide_aligned <- energia_fc_wide |>
+  filter(mes > ultimo_hist) |>
+  arrange(mes) |>
+  drop_na(all_of(x_fut_cols)) |>
+  slice_head(n = h_meses)
+
+# Como el lm usa solo X, armamos newdata con esas X (todo numérico)
+x_fut_newdata <- energia_fc_wide_aligned |>
+  select(mes, all_of(x_fut_cols)) |>
+  mutate(across(-mes, as.numeric)) |>
+  as.data.frame()
+
+# Predicción ex–ante de Y con el modelo entrenado en todo el historial
+y_fc_exante <- predict(modelo_reg_all, newdata = x_fut_newdata)
+
+exante_fc_tsb <- tibble::tibble(
+  mes   = x_fut_newdata$mes,
+  .mean = as.numeric(y_fc_exante)
+) |>
+  as_tsibble(index = mes)
+
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# ================================
+# (3) Escenarios: optimista y pesimista (shocks multiplicativos a X)
+# ================================
+# Construimos dos newdata modificando las X ex–ante
+x_fut_opt <- x_fut_newdata
+x_fut_pes <- x_fut_newdata
+
+x_cols_only <- setdiff(names(x_fut_newdata), "mes")
+
+x_fut_opt[x_cols_only] <- lapply(x_fut_opt[x_cols_only], function(z) z * escala_opt)
+x_fut_pes[x_cols_only] <- lapply(x_fut_pes[x_cols_only], function(z) z * escala_pes)
+
+y_fc_opt <- predict(modelo_reg_all, newdata = x_fut_opt)
+y_fc_pes <- predict(modelo_reg_all, newdata = x_fut_pes)
+
+escenarios_fc_tsb <- bind_rows(
+  tibble::tibble(mes = x_fut_newdata$mes, escenario = "base_exante", .mean = as.numeric(y_fc_exante)),
+  tibble::tibble(mes = x_fut_newdata$mes, escenario = "optimista",   .mean = as.numeric(y_fc_opt)),
+  tibble::tibble(mes = x_fut_newdata$mes, escenario = "pesimista",   .mean = as.numeric(y_fc_pes))
+) |>
+  as_tsibble(index = mes, key = escenario)
+
+```
+
+```{r}
+# ================================
+# Salidas clave
+# ================================
+# 1) Métricas de test
+print(metricas_test)
+
+# 2) Pronóstico ex–ante (primeros renglones)
+print(exante_fc_tsb |> as_tibble() |> head())
+
+# 3) Escenarios (primeros renglones)
+print(escenarios_fc_tsb |> as_tibble() |> group_by(escenario) |> slice_head(n = 6))
+
+# ================================
+# Plots rápidos (opcional)
+# ================================
+# (a) Test: observado vs pronosticado
+ggplot(test_fc_tsb, aes(x = mes)) +
+  geom_line(aes(y = y_obs)) +
+  geom_line(aes(y = y_hat), linetype = "dashed") +
+  labs(title = glue("Train/Test (h={h_meses}) para {y_var}"),
+       y = y_var, x = NULL)
+
+# (b) Ex–ante: base vs escenarios
+ggplot(escenarios_fc_tsb, aes(x = mes, y = .mean, linetype = escenario)) +
+  geom_line() +
+  labs(title = glue("Escenarios a {h_meses} meses para {y_var}"),
+       y = y_var, x = NULL)
+```
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# --- CHECKS para el ex–ante ---
+if (length(x_fut_cols) == 0) {
+  stop("No hay regresores X disponibles para el ex–ante (x_fut_cols está vacío). Revisa qué columnas entran a la fórmula.")
+}
+
+# Predicción ex–ante de Y con el modelo entrenado en todo el historial
+y_fc_exante <- predict(modelo_reg_all, newdata = x_fut_newdata)
+
+# Tabla ex–ante (36 meses)
+exante_fc_tsb <- tibble::tibble(
+  mes   = x_fut_newdata$mes,
+  .mean = as.numeric(y_fc_exante)
+) |>
+  as_tsibble(index = mes)
+
+# --- Mostrar/validar ---
+# Debe tener 36 filas
+print(dim(exante_fc_tsb))     # (36, 2)
+print(exante_fc_tsb |> as_tibble() |> slice_head(n = 10))
+
+# --- Plot ex–ante solo ---
+ggplot(exante_fc_tsb, aes(x = mes, y = .mean)) +
+  geom_line() +
+  labs(title = "Pronóstico ex–ante a 36 meses (base)",
+       x = NULL, y = y_var)
+
+# --- Plot con historial para contexto (opcional) ---
+hist_y <- datos_reg |>
+  select(mes, !!y_var) |>
+  rename(y_hist = !!sym(y_var))
+
+ggplot() +
+  geom_line(data = hist_y, aes(x = mes, y = y_hist)) +
+  geom_line(data = exante_fc_tsb, aes(x = mes, y = .mean), linetype = "dashed") +
+  labs(title = "Histórico vs ex–ante (base) a 36 meses",
+       x = NULL, y = y_var)
+```
