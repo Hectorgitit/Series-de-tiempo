@@ -218,36 +218,44 @@ energia_mensual_tsb
 ```
 
 ```{r}
-# 3) ARIMA independiente por serie
-energia_fit <- energia_mensual_tsb |>
-  model(auto_arima = ARIMA(valor))
-energia_fit
+#| echo: false
+
+# Panel WIDE con observadas (Y + X) a partir de energia_mensual_tsb
+
+energia_panel_wide <- energia_mensual_tsb |>
+dplyr::as_tibble() |>
+tidyr::pivot_wider(names_from = serie, values_from = valor) |>
+dplyr::arrange(mes) |>
+tsibble::as_tsibble(index = mes)
+
+# Selección de regresores disponibles
+
+candidatas_x <- setdiff(vars_fred, y_var)
+x_vars <- intersect(candidatas_x, names(energia_panel_wide))
+
+stopifnot(y_var %in% names(energia_panel_wide), length(x_vars) > 0)
+
+# Fórmula ARIMAX (órdenes auto + xregs)
+
+fmla_arimax <- as.formula(paste(y_var, "~", paste(x_vars, collapse = " + ")))
+
+# Datos limpios (sin NA en Y ni X)
+
+energia_reg <- energia_panel_wide |>
+dplyr::select(mes, dplyr::all_of(c(y_var, x_vars))) |>
+tidyr::drop_na()
+
+# Ajuste ARIMAX
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+# Diagnóstico breve
+
+fabletools::report(energia_arimax_fit)
+
 ```
 
-```{r}
-# 4) Fitted a formato wide (una columna por serie)
-energia_ajustada_wide <- energia_fit |>
-  augment() |>
-  select(serie, mes, .fitted) |>
-  rename(valor_ajustado = .fitted) |>
-  pivot_wider(names_from = serie, values_from = valor_ajustado) |>
-  arrange(mes)
-energia_ajustada_wide
-```
-
-```{r}
-
-# 5) Construir fórmula con las columnas realmente disponibles
-disponibles <- names(energia_ajustada_wide)
-stopifnot(y_var %in% disponibles)  # la Y debe existir
-
-candidatas_x <- setdiff(vars_fred, c(y_var, "mes"))
-x_vars <- intersect(candidatas_x, disponibles)
-
-form_str <- paste(y_var, "~", paste(x_vars, collapse = " + "))
-fmla <- as.formula(form_str)
-message("Fórmula usada: ", form_str)
-```
 
 ```{r}
 datos_reg <- energia_ajustada_wide |>
@@ -278,203 +286,220 @@ summary(modelo_reg_all)
 Optimización 1
 
 ```{r}
-var_out <- "NATURALGAS"
-resp <- all.vars(fmla)[1]
-xs   <- setdiff(all.vars(fmla)[-1], var_out)
-fmla <- reformulate(xs, response = resp)
+#| echo: false
 
-summary(lm(fmla, data = datos_reg))
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "NATURALGAS"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
 ```
 
 
 ## Eliminamos otra variable no significativa
 Optimización 2
 ```{r}
-var_out <- "DCOILWTICO"
-resp <- all.vars(fmla)[1]
-xs   <- setdiff(all.vars(fmla)[-1], var_out)
-fmla <- reformulate(xs, response = resp)
+#| echo: false
 
-summary(lm(fmla, data = datos_reg))
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "DCOILWTICO"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
 ```
-
 
 ## Eliminamos otra variable no significativa
 Optimización 3
-```{r}
-var_out <- "WPS0554"
-resp <- all.vars(fmla)[1]
-xs   <- setdiff(all.vars(fmla)[-1], var_out)
-fmla <- reformulate(xs, response = resp)
 
-summary(lm(fmla, data = datos_reg))
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "WPS0554"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
 ```
+
 
 ## Eliminamos ya la última no significativa
 Optimización 4
 
 ```{r}
-var_out <- "APU000072610"
-resp <- all.vars(fmla)[1]
-xs   <- setdiff(all.vars(fmla)[-1], var_out)
-fmla <- reformulate(xs, response = resp)
+#| echo: false
 
-summary(lm(fmla, data = datos_reg))
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "APU000072610"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
 ```
+
 ## Reflexión
 En el caso de esta regresión en específico solo eliminares el consumo total de gas natural en EU ya que las demas solo reducen el R cuadrado ajustado, lo cual es lo que se puede explicar de la variable a pronosticar.
 
 ```{r}
 #| echo: false
-#| warning: false
-#| message: false
-# (1) Train/Test: 36 meses de test con X observadas
-# ================================
-ultimo_mes <- max(datos_reg$mes)
-corte_test <- ultimo_mes - (h_meses - 1) # 36 meses hacia atrás, inclusive
 
-datos_reg_train <- datos_reg |> filter(mes <  corte_test)
-datos_reg_test  <- datos_reg |> filter(mes >= corte_test)
+# Horizonte
 
-modelo_reg_train <- lm(fmla, data = datos_reg_train)
+h_meses <- 36
 
-# Pronóstico sobre el test usando X observadas
-y_hat_test <- predict(modelo_reg_train, newdata = datos_reg_test)
+# Corte temporal
 
-# Métricas clásicas (FPP3): MAE, RMSE, MAPE
-y_obs_test <- datos_reg_test[[y_var]]
-mae_test  <- mean(abs(y_obs_test - y_hat_test))
-rmse_test <- sqrt(mean((y_obs_test - y_hat_test)^2))
-mape_test <- mean(abs((y_obs_test - y_hat_test) / y_obs_test)) * 100
+ultimo_mes <- max(energia_reg$mes)
+corte_test <- ultimo_mes - (h_meses - 1)
 
-metricas_test <- tibble::tibble(
-  medida = c("MAE", "RMSE", "MAPE_%"),
-  valor  = c(mae_test, rmse_test, mape_test)
+train <- energia_reg |> dplyr::filter(mes <  corte_test)
+test  <- energia_reg |> dplyr::filter(mes >= corte_test)
+
+# Re-ajustar ARIMAX en TRAIN
+
+fit_train <- train |> fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+# Pronóstico sobre TEST (X observadas)
+
+fc_test <- fabletools::forecast(
+fit_train,
+new_data = test |> dplyr::select(mes, dplyr::all_of(setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])))
 )
 
-# Serie pronosticada vs observada en test (tsibble)
-test_fc_tsb <- tibble::tibble(
-  mes   = datos_reg_test$mes,
-  y_obs = y_obs_test,
-  y_hat = as.numeric(y_hat_test)
-) |>
-  as_tsibble(index = mes)
+# Métricas contra Y observada
+
+acc_test <- fabletools::accuracy(fc_test, test)
+acc_test
 
 ```
 
 
 ```{r}
 #| echo: false
-#| warning: false
-#| message: false
-# ================================
-# (2) Ex–ante: proyectar X con ARIMA y luego Y por 36 meses
-# ================================
-# Pronóstico ARIMA(h=36) para todas las series -> sacar la MEDIA de la distribución
-energia_fc <- energia_fit |>
-  forecast(h = h_meses) |>
-  mutate(valor_fc = mean(valor)) |>     # <<--- extrae el punto (media) de la distribución
-  as_tibble() |>
-  select(serie, mes, valor_fc) |>
-  arrange(serie, mes)
 
-# Wide: una columna por serie, TODO numérico
-energia_fc_wide <- energia_fc |>
-  pivot_wider(names_from = serie, values_from = valor_fc) |>
-  arrange(mes) |>
-  mutate(across(-mes, as.numeric))      # <<--- por si alguna quedó como list/other
+# Pronóstico ARIMA(h) para cada X
 
+x_vars <- setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])
+x_series <- energia_mensual_tsb |> dplyr::filter(serie %in% x_vars)
 
+x_fit <- x_series |> fabletools::model(auto = fable::ARIMA(valor))
 
-# Asegurar que las columnas de X requeridas están en el pronóstico
-x_fut_cols <- intersect(x_vars, names(energia_fc_wide))
-stopifnot(length(x_fut_cols) > 0)
+x_fc <- x_fit |>
+fabletools::forecast(h = h_meses) |>
+dplyr::select(serie, mes, .mean) |>
+dplyr::rename(valor_fc = .mean) |>
+dplyr::mutate(valor_fc = as.numeric(valor_fc)) |>
+tidyr::pivot_wider(names_from = serie, values_from = valor_fc) |>
+dplyr::arrange(mes)
 
-# --- ALINEAR FUTURO para evitar el "gap" y NAs al inicio ---
-ultimo_hist <- max(datos_reg$mes)
+# Alinear con el último mes observado de Y
 
-energia_fc_wide_aligned <- energia_fc_wide |>
-  filter(mes > ultimo_hist) |>
-  arrange(mes) |>
-  drop_na(all_of(x_fut_cols)) |>
-  slice_head(n = h_meses)
+ultimo_hist <- max(energia_reg$mes)
+x_fc_aligned <- x_fc |>
+dplyr::filter(mes > ultimo_hist) |>
+tidyr::drop_na(dplyr::all_of(x_vars)) |>
+dplyr::slice_head(n = h_meses)
 
-# Como el lm usa solo X, armamos newdata con esas X (todo numérico)
-x_fut_newdata <- energia_fc_wide_aligned |>
-  select(mes, all_of(x_fut_cols)) |>
-  mutate(across(-mes, as.numeric)) |>
-  as.data.frame()
+# Ex–ante (base)
 
-# Predicción ex–ante de Y con el modelo entrenado en todo el historial
-y_fc_exante <- predict(modelo_reg_all, newdata = x_fut_newdata)
+fc_exante <- fabletools::forecast(
+energia_arimax_fit,
+new_data = x_fc_aligned |> dplyr::select(mes, dplyr::all_of(x_vars))
+)
 
-exante_fc_tsb <- tibble::tibble(
-  mes   = x_fut_newdata$mes,
-  .mean = as.numeric(y_fc_exante)
-) |>
-  as_tsibble(index = mes)
-
+fc_exante
 
 ```
 
 ```{r}
 #| echo: false
-#| warning: false
-#| message: false
-# ================================
-# (3) Escenarios: optimista y pesimista (shocks multiplicativos a X)
-# ================================
-# Construimos dos newdata modificando las X ex–ante
-x_fut_opt <- x_fut_newdata
-x_fut_pes <- x_fut_newdata
+escala_opt <- 0.97  # -3%
+escala_pes <- 1.03  # +3%
 
-x_cols_only <- setdiff(names(x_fut_newdata), "mes")
+newdata_scen <- fabletools::scenarios(
+base =  x_fc_aligned |> dplyr::select(mes, dplyr::all_of(x_vars)),
+optimista = x_fc_aligned |>
+dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)) |>
+dplyr::select(mes, dplyr::all_of(x_vars)),
+pesimista = x_fc_aligned |>
+dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)) |>
+dplyr::select(mes, dplyr::all_of(x_vars)),
+names_to = ".scenario"
+)
 
-x_fut_opt[x_cols_only] <- lapply(x_fut_opt[x_cols_only], function(z) z * escala_opt)
-x_fut_pes[x_cols_only] <- lapply(x_fut_pes[x_cols_only], function(z) z * escala_pes)
-
-y_fc_opt <- predict(modelo_reg_all, newdata = x_fut_opt)
-y_fc_pes <- predict(modelo_reg_all, newdata = x_fut_pes)
-
-escenarios_fc_tsb <- bind_rows(
-  tibble::tibble(mes = x_fut_newdata$mes, escenario = "base_exante", .mean = as.numeric(y_fc_exante)),
-  tibble::tibble(mes = x_fut_newdata$mes, escenario = "optimista",   .mean = as.numeric(y_fc_opt)),
-  tibble::tibble(mes = x_fut_newdata$mes, escenario = "pesimista",   .mean = as.numeric(y_fc_pes))
-) |>
-  as_tsibble(index = mes, key = escenario)
+fc_scen <- fabletools::forecast(energia_arimax_fit, new_data = newdata_scen)
+fc_scen
 
 ```
+
+
 
 ```{r}
-# ================================
-# Salidas clave
-# ================================
-# 1) Métricas de test
-print(metricas_test)
+#| echo: false
 
-# 2) Pronóstico ex–ante (primeros renglones)
-print(exante_fc_tsb |> as_tibble() |> head())
+# Métricas de test
 
-# 3) Escenarios (primeros renglones)
-print(escenarios_fc_tsb |> as_tibble() |> group_by(escenario) |> slice_head(n = 6))
+print(acc_test)
 
-# ================================
-# Plots rápidos (opcional)
-# ================================
-# (a) Test: observado vs pronosticado
-ggplot(test_fc_tsb, aes(x = mes)) +
-  geom_line(aes(y = y_obs)) +
-  geom_line(aes(y = y_hat), linetype = "dashed") +
-  labs(title = glue("Train/Test (h={h_meses}) para {y_var}"),
-       y = y_var, x = NULL)
+# Ex–ante (primeras filas)
 
-# (b) Ex–ante: base vs escenarios
-ggplot(escenarios_fc_tsb, aes(x = mes, y = .mean, linetype = escenario)) +
-  geom_line() +
-  labs(title = glue("Escenarios a {h_meses} meses para {y_var}"),
-       y = y_var, x = NULL)
+print(fc_exante |> fabletools::as_fable() |> dplyr::as_tibble() |> dplyr::slice_head(n = 6))
+
+# Escenarios (primeras filas por escenario)
+
+print(fc_scen |> fabletools::as_fable() |> dplyr::as_tibble() |>
+dplyr::group_by(.scenario) |> dplyr::slice_head(n = 6))
+
 ```
 
+
+```{r}
+#| echo: false
+
+# Histórico vs ex–ante base
+
+autoplot(energia_reg, !!rlang::sym(y_var)) +
+autolayer(fc_exante, level = 95) +
+labs(title = paste("ARIMAX –", y_var, "ex–ante (h =", h_meses, ")"),
+x = NULL, y = y_var)
+
+# Escenarios
+
+autoplot(fc_scen) +
+labs(title = paste("ARIMAX + escenarios (", y_var, ")", sep = ""),
+x = NULL, y = y_var)
+
+```
 
 ```{r}
 #| echo: false
