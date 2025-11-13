@@ -258,14 +258,6 @@ fabletools::report(energia_arimax_fit)
 
 
 ```{r}
-datos_reg <- energia_ajustada_wide |>
-  drop_na()
-
-# Modelo con todo el historial (para ex-ante)
-modelo_reg_all <- lm(fmla, data = datos_reg)
-```
-
-```{r}
 #MHHNGSP - Precio spot del gas natural en el punto Henry Hub (referencia para EE. UU.).
 #WPS0554 - Índice de precios al productor para gas natural destinado a la generación eléctrica.
 #NATURALGAS - Consumo total de gas natural en EE. UU.
@@ -275,11 +267,7 @@ modelo_reg_all <- lm(fmla, data = datos_reg)
 #INDPRO - Producción industrial total de EE. UU. (todos los sectores).
 ```
 
-```{r}
-# 7) Estrellitas, R^2, R^2 ajustado, p-value global
-summary(modelo_reg_all)
 
-```
 
 
 ## Eliminamos una variable no significativa
@@ -499,46 +487,4 @@ autoplot(fc_scen) +
 labs(title = paste("ARIMAX + escenarios (", y_var, ")", sep = ""),
 x = NULL, y = y_var)
 
-```
-
-```{r}
-#| echo: false
-#| warning: false
-#| message: false
-# --- CHECKS para el ex–ante ---
-if (length(x_fut_cols) == 0) {
-  stop("No hay regresores X disponibles para el ex–ante (x_fut_cols está vacío). Revisa qué columnas entran a la fórmula.")
-}
-
-# Predicción ex–ante de Y con el modelo entrenado en todo el historial
-y_fc_exante <- predict(modelo_reg_all, newdata = x_fut_newdata)
-
-# Tabla ex–ante (36 meses)
-exante_fc_tsb <- tibble::tibble(
-  mes   = x_fut_newdata$mes,
-  .mean = as.numeric(y_fc_exante)
-) |>
-  as_tsibble(index = mes)
-
-# --- Mostrar/validar ---
-# Debe tener 36 filas
-print(dim(exante_fc_tsb))     # (36, 2)
-print(exante_fc_tsb |> as_tibble() |> slice_head(n = 10))
-
-# --- Plot ex–ante solo ---
-ggplot(exante_fc_tsb, aes(x = mes, y = .mean)) +
-  geom_line() +
-  labs(title = "Pronóstico ex–ante a 36 meses (base)",
-       x = NULL, y = y_var)
-
-# --- Plot con historial para contexto (opcional) ---
-hist_y <- datos_reg |>
-  select(mes, !!y_var) |>
-  rename(y_hist = !!sym(y_var))
-
-ggplot() +
-  geom_line(data = hist_y, aes(x = mes, y = y_hist)) +
-  geom_line(data = exante_fc_tsb, aes(x = mes, y = .mean), linetype = "dashed") +
-  labs(title = "Histórico vs ex–ante (base) a 36 meses",
-       x = NULL, y = y_var)
 ```
