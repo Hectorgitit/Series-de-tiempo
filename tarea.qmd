@@ -425,7 +425,7 @@ x_fc <- x_fit |>
 new_data_exante <- fut_index |>
   dplyr::left_join(x_fc, by = "mes") |>
   dplyr::select(mes, dplyr::all_of(x_vars)) |>
-  tsibble::as_tsibble(index = mes)   # << clave para que coincida index/key con el modelo
+  tsibble::as_tsibble(index = mes)   # << clave: mismo index/key que el modelo
 
 # 6) Ex–ante (base) de Y con ARIMAX
 fc_exante <- fabletools::forecast(
@@ -434,12 +434,6 @@ fc_exante <- fabletools::forecast(
 )
 
 fc_exante
-```
-
-```
-
-```
-
 ```
 
 
