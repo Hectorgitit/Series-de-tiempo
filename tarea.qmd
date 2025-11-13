@@ -391,100 +391,86 @@ acc_test
 
 ```
 
-
-```{r}
+```{r arimax_exante}
 #| echo: false
+# EX–ANTE con ARIMAX — horizonte fijo y new_data con misma estructura que el entrenamiento
 
-# Pronóstico ARIMA(h) para cada X
-
+# 1) Recojo los regresores vigentes (por si quitaste alguno en “Optimización”)
 x_vars <- setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])
-x_series <- energia_mensual_tsb |> dplyr::filter(serie %in% x_vars)
 
-x_fit <- x_series |> fabletools::model(auto = fable::ARIMA(valor))
+# 2) Último mes observado en el set de entrenamiento del ARIMAX
+ultimo_hist <- max(energia_reg$mes)  # yearmonth
+
+# 3) Plantilla de horizonte: EXACTAMENTE los próximos h_meses (como tsibble)
+fut_index <- tibble::tibble(
+  mes = tsibble::yearmonth(ultimo_hist) + seq_len(h_meses)
+) |> tsibble::as_tsibble(index = mes)
+
+# 4) Pronóstico ARIMA de cada X usando la plantilla (no 'h')
+x_series <- energia_mensual_tsb |> dplyr::filter(serie %in% x_vars)
+x_fit    <- x_series |> fabletools::model(auto = fable::ARIMA(valor))
 
 x_fc <- x_fit |>
-fabletools::forecast(h = h_meses) |>
-dplyr::select(serie, mes, .mean) |>
-dplyr::rename(valor_fc = .mean) |>
-dplyr::mutate(valor_fc = as.numeric(valor_fc)) |>
-tidyr::pivot_wider(names_from = serie, values_from = valor_fc) |>
-dplyr::arrange(mes)
+  fabletools::forecast(new_data = fut_index) |>   # forzamos fechas futuras correctas
+  dplyr::mutate(valor_fc = mean(valor)) |>        # punto (media de la distribución)
+  dplyr::as_tibble() |>
+  dplyr::select(serie, mes, valor_fc) |>
+  tidyr::pivot_wider(names_from = serie, values_from = valor_fc) |>
+  dplyr::arrange(mes) |>
+  dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), as.numeric))
 
-# Alinear con el último mes observado de Y
+# 5) new_data para ARIMAX:
+#    partimos de 'fut_index' (tsibble) -> pegamos X -> dejamos SOLO mes + X
+#    y RECONVERTIMOS a tsibble (esto evita el error de "different key structure")
+new_data_exante <- fut_index |>
+  dplyr::left_join(x_fc, by = "mes") |>
+  dplyr::select(mes, dplyr::all_of(x_vars)) |>
+  tsibble::as_tsibble(index = mes)   # << clave para que coincida index/key con el modelo
 
-ultimo_hist <- max(energia_reg$mes)
-x_fc_aligned <- x_fc |>
-dplyr::filter(mes > ultimo_hist) |>
-tidyr::drop_na(dplyr::all_of(x_vars)) |>
-dplyr::slice_head(n = h_meses)
-
-# Ex–ante (base)
-
+# 6) Ex–ante (base) de Y con ARIMAX
 fc_exante <- fabletools::forecast(
-energia_arimax_fit,
-new_data = x_fc_aligned |> dplyr::select(mes, dplyr::all_of(x_vars))
+  energia_arimax_fit,
+  new_data = new_data_exante
 )
 
 fc_exante
+```
 
 ```
 
+```
+
+```
+
+
+
+
 ```{r}
 #| echo: false
+# Escenarios con fabletools::scenarios()
+
+# Por seguridad, vuelvo a tomar los regresores vigentes
+x_vars <- setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])
+
 escala_opt <- 0.97  # -3%
 escala_pes <- 1.03  # +3%
 
 newdata_scen <- fabletools::scenarios(
-base =  x_fc_aligned |> dplyr::select(mes, dplyr::all_of(x_vars)),
-optimista = x_fc_aligned |>
-dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)) |>
-dplyr::select(mes, dplyr::all_of(x_vars)),
-pesimista = x_fc_aligned |>
-dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)) |>
-dplyr::select(mes, dplyr::all_of(x_vars)),
-names_to = ".scenario"
+  base =  x_fc_aligned |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+  optimista = x_fc_aligned |>
+    dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)) |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+  pesimista = x_fc_aligned |>
+    dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)) |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+  names_to = ".scenario"
 )
 
 fc_scen <- fabletools::forecast(energia_arimax_fit, new_data = newdata_scen)
 fc_scen
-
 ```
 
-
-
-```{r}
-#| echo: false
-
-# Métricas de test
-
-print(acc_test)
-
-# Ex–ante (primeras filas)
-
-print(fc_exante |> fabletools::as_fable() |> dplyr::as_tibble() |> dplyr::slice_head(n = 6))
-
-# Escenarios (primeras filas por escenario)
-
-print(fc_scen |> fabletools::as_fable() |> dplyr::as_tibble() |>
-dplyr::group_by(.scenario) |> dplyr::slice_head(n = 6))
-
-```
-
-
-```{r}
-#| echo: false
-
-# Histórico vs ex–ante base
-
-autoplot(energia_reg, !!rlang::sym(y_var)) +
-autolayer(fc_exante, level = 95) +
-labs(title = paste("ARIMAX –", y_var, "ex–ante (h =", h_meses, ")"),
-x = NULL, y = y_var)
-
-# Escenarios
-
-autoplot(fc_scen) +
-labs(title = paste("ARIMAX + escenarios (", y_var, ")", sep = ""),
-x = NULL, y = y_var)
-
-```
