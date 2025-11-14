@@ -1,0 +1,559 @@
+---
+title: "Serie de electricidad"
+format: 
+  revealjs:
+    scrollable: true
+    incremental: true
+    smaller: true
+    theme: default
+    embed-resources: true
+execute:
+  echo: true
+  output-location: column-fragment
+---
+
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# --- ARIMA por serie + LM (fórmula automática según columnas disponibles) ---
+
+library(tidyquant)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(glue)
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+h_meses <- 36
+y_var   <- "IPN221114T8N"   
+escala_opt <- 0.97          
+escala_pes <- 1.03           
+```
+
+
+
+¿Qué buscamos pronosticar?
+
+
+
+
+## Serie IPN221114T8N
+
+Volumen de la generación eléctrica, pero **¿De qué fuentes?**
+
+De las NAICS (North American Industry Classification System)
+NAICS 221114–221118:
+
+-221114 **Solar**
+
+-221115 **Eólica**
+
+-221116 **Geotérmica**
+
+-221117 **Biomasa**
+
+-221118 **Otras**
+
+Es decir, no incluye: 
+
+-221112 Fossil Fuel Electric Power Generation (**carbón**, **gas natural**, **fuel-oil**)
+
+-221113 **Nuclear**
+
+-221111 **Hidroeléctrica** (renovable, pero va aparte en NAICS)
+
+## PD
+Intente bajar series mas razonables como la capacidad eolica y la capacidad de intalada de paneles, pero hubo un tema con la pagina de U.S. Energy Information Administration y ni con mi API key pude bajar nada 😭
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+#| fig.show: hold
+
+# 1) Descargar y preparar
+ip_renov_us_raw <- tq_get("IPN221114T8N", get = "economic.data") |>
+  transmute(mes = yearmonth(date), valor = price)
+
+ip_renov_us <- ip_renov_us_raw |>
+  group_by(mes) |>
+  summarise(valor = mean(valor, na.rm = TRUE), .groups = "drop") |>
+  as_tsibble(index = mes)
+
+# 2) Calidad de datos (sin imprimir en el render)
+invisible(glimpse(ip_renov_us))
+invisible(interval(ip_renov_us))
+invisible(has_gaps(ip_renov_us)); invisible(count_gaps(ip_renov_us))
+
+# 3) Serie, STL y estacionalidad (asignar y luego imprimir)
+
+# Serie
+p1 <- autoplot(ip_renov_us, valor) +
+  labs(title = "IPN221114T8N – índice (2017=100, no ajustado)", x = NULL, y = NULL)
+print(p1)
+
+# STL
+stl_comps <- ip_renov_us |>
+  model(STL(valor ~ trend(window = 13) + season(window = "periodic"))) |>
+  components()
+p2 <- autoplot(stl_comps) +
+  labs(title = "Descomposición STL")
+print(p2)
+
+# Estacionalidad por mes
+p3 <- gg_season(ip_renov_us, valor) +
+  labs(title = "Estacionalidad por mes", x = "Mes", y = NULL)
+print(p3)
+
+# 4) Fuerza de tendencia/estacionalidad (calculado pero NO mostrado)
+feats <- ip_renov_us |>
+  features(valor, feat_stl) |>
+  select(trend_strength, seasonal_strength_year)
+invisible(feats)
+
+# Evitar auto-impresión al final del chunk
+invisible(NULL)
+```
+```{r}
+# 2) Calidad de datos
+glimpse(ip_renov_us)
+interval(ip_renov_us)
+has_gaps(ip_renov_us); count_gaps(ip_renov_us)
+
+# 3) Serie, STL y estacionalidad
+autoplot(ip_renov_us, valor) +
+  labs(title = "IPN221114T8N – índice (2017=100, no ajustado)", x = NULL, y = NULL)
+
+ip_renov_us |>
+  model(STL(valor ~ trend(window = 13) + season(window = "periodic"))) |>
+  components() |>
+  autoplot() +
+  labs(title = "Descomposición STL")
+
+gg_season(ip_renov_us, valor) +
+  labs(title = "Estacionalidad por mes", x = "Mes", y = NULL)
+```
+
+
+## ¿Qué sería lo lógico?
+Buscar series que no sean redundantes con energías renovables.
+
+MHHNGSP - **Precio spot del gas natural** en el punto Henry Hub (referencia para EE. UU.).
+
+WPS0554 - **Índice de precios al productor para gas natural** destinado a la generación eléctrica.
+
+NATURALGAS - **Consumo total de gas natural** en EE. UU.
+
+##
+
+DCOILWTICO - **Precio promedio del petróleo crudo** WTI (referencia mundial).
+
+IPUTIL - **Producción industrial real del sector de servicios públicos** (electricidad, agua, gas).
+
+APU000072610 - **Precio promedio minorista de la electricidad** en hogares de EE. UU.
+
+INDPRO - **Producción industrial** total de EE. UU. (todos los sectores).
+
+CPIENGSL - CPI: “Energy Services” (electricidad + gas para el hogar) – **consumidores urbanos**.
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+# 1) Lista deseada (si alguna no existe en FRED o falla la conexión, la omitiremos)
+vars_fred <- c(
+  "IPN221114T8N",                 # objetivo
+  "MHHNGSP","WPS0554","NATURALGAS","DCOILWTICO","IPUTIL",
+  "GASPRICE","APU000072610","CO2EMISS","INDPRO","TEMPUS","CPIENGSL"
+)
+vars_fred
+
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# 2) Descargar y mensualizar
+energia_raw <- tq_get(vars_fred, get = "economic.data") |>
+  rename(serie = symbol, valor = price)
+energia_raw
+```
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+# 2.1) Reportar qué series sí bajaron y cuáles faltaron
+series_ok  <- energia_raw |> distinct(serie) |> pull(serie)
+series_out <- setdiff(vars_fred, series_ok)
+message("Series descargadas: ", paste(series_ok, collapse = ", "))
+if (length(series_out) > 0) {
+  message("⚠️ No se descargaron (se excluirán): ", paste(series_out, collapse = ", "))
+}
+series_ok
+```
+
+```{r}
+
+energia_mensual_tsb <- energia_raw |>
+  transmute(serie, mes = yearmonth(date), valor) |>
+  group_by(serie, mes) |>
+  summarise(valor = mean(valor, na.rm = TRUE), .groups = "drop") |>
+  as_tsibble(index = mes, key = serie) |>
+  arrange(serie, mes)
+energia_mensual_tsb
+```
+
+```{r}
+#| echo: false
+
+# Panel WIDE con observadas (Y + X) a partir de energia_mensual_tsb
+
+energia_panel_wide <- energia_mensual_tsb |>
+dplyr::as_tibble() |>
+tidyr::pivot_wider(names_from = serie, values_from = valor) |>
+dplyr::arrange(mes) |>
+tsibble::as_tsibble(index = mes)
+
+# Selección de regresores disponibles
+
+candidatas_x <- setdiff(vars_fred, y_var)
+x_vars <- intersect(candidatas_x, names(energia_panel_wide))
+
+stopifnot(y_var %in% names(energia_panel_wide), length(x_vars) > 0)
+
+# Fórmula ARIMAX (órdenes auto + xregs)
+
+fmla_arimax <- as.formula(paste(y_var, "~", paste(x_vars, collapse = " + ")))
+
+# Datos limpios (sin NA en Y ni X)
+
+energia_reg <- energia_panel_wide |>
+dplyr::select(mes, dplyr::all_of(c(y_var, x_vars))) |>
+tidyr::drop_na()
+
+# Ajuste ARIMAX
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+# Diagnóstico breve
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+
+```{r}
+#MHHNGSP - Precio spot del gas natural en el punto Henry Hub (referencia para EE. UU.).
+#WPS0554 - Índice de precios al productor para gas natural destinado a la generación eléctrica.
+#NATURALGAS - Consumo total de gas natural en EE. UU.
+#DCOILWTICO - Precio promedio del petróleo crudo WTI (referencia mundial).
+#IPUTIL - Producción industrial real del sector de servicios públicos (electricidad, agua, gas).
+#APU000072610 - Precio promedio minorista de la electricidad en hogares de EE. UU.
+#INDPRO - Producción industrial total de EE. UU. (todos los sectores).
+```
+
+## Eliminamos una variable no significativa
+Optimización 1
+
+Eliminamos **WPS0554** indice de precios al productor para gas natural ya que va por la misma linea que el precio del gas natural **MHHNGSP**.
+
+Si le subes el precio al productor el productor te lo sube a ti.
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "WPS0554"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+
+## Eliminamos una variable no significativa
+Optimización 2
+
+Quitamos Gas natural por que este consumo es mas una consecuencia de cuanta energia renovable se usa.
+Por que en la practica primero se usa la energia renovable que es mas barata y despues se usa el gas. 
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "NATURALGAS"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+
+## Eliminamos otra variable no significativa
+Optimización 3
+Quitamos **DCOILWTICO** que es precio del petroleo crudo, porque no representa mucho en EE.UU.
+U.S. Energy Information Administration (EIA), que es la agencia oficial de estadísticas de energía de Estados Unidos, menciona que para la generacion electrica en EE.UU. se usa.
+
+-Gas natural: ~43% de la electricidad
+
+-Carbón: ~16%
+
+-Nuclear: ~19%
+
+-Renovables (total): ~21%
+
+-Petróleo (total): ~0.4%]
+
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "DCOILWTICO"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+## Eliminamos ya la última no significativa
+Optimización 4
+Quitamos **CPIENGSL** que es indice de precio al consumidor en la parte de energia ya que para eso  tenemos a **APU000072610** que es precio promedio minorista en EE.UU.
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "CPIENGSL"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+## Reflexión
+
+
+
+
+```{r}
+#| echo: false
+
+# Horizonte
+
+h_meses <- 36
+
+# Corte temporal
+
+ultimo_mes <- max(energia_reg$mes)
+corte_test <- ultimo_mes - (h_meses - 1)
+
+train <- energia_reg |> dplyr::filter(mes <  corte_test)
+test  <- energia_reg |> dplyr::filter(mes >= corte_test)
+
+# Re-ajustar ARIMAX en TRAIN
+
+fit_train <- train |> fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+# Pronóstico sobre TEST (X observadas)
+
+fc_test <- fabletools::forecast(
+fit_train,
+new_data = test |> dplyr::select(mes, dplyr::all_of(setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])))
+)
+
+# Métricas contra Y observada
+
+acc_test <- fabletools::accuracy(fc_test, test)
+acc_test
+
+```
+
+```{r arimax_exante}
+#| echo: false
+# EX–ANTE con ARIMAX — horizonte fijo y new_data con misma estructura que el entrenamiento
+
+# 1) Recojo Y y las X vigentes (por si quitaste algunas en “Optimización”)
+y_var  <- all.vars(fmla_arimax)[1]
+x_vars <- setdiff(all.vars(fmla_arimax), y_var)
+
+# 2) Último mes observado en el set de entrenamiento del ARIMAX
+ultimo_hist <- max(energia_reg$mes)  # yearmonth
+
+# 3) Serie histórica de X (en largo), recortada al mismo horizonte del ARIMAX
+x_series <- energia_mensual_tsb |>
+  dplyr::filter(
+    serie %in% x_vars,
+    mes <= ultimo_hist          # 👈 recortamos aquí
+  )
+
+# 4) Ajuste ARIMA por cada regresor
+x_fit <- x_series |>
+  fabletools::model(auto = fable::ARIMA(valor))
+
+# 5) Pronóstico ARIMA de cada X usando h = h_meses
+x_fc <- x_fit |>
+  fabletools::forecast(h = h_meses) |>
+  dplyr::mutate(valor_fc = mean(valor)) |>        # punto (media de la distribución)
+  dplyr::as_tibble() |>
+  dplyr::select(serie, mes, valor_fc) |>
+  tidyr::pivot_wider(names_from = serie, values_from = valor_fc) |>
+  dplyr::arrange(mes) |>
+  dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), as.numeric))
+
+# 6) new_data para ARIMAX: tsibble con mes + X pronosticadas
+new_data_exante <- x_fc |>
+  dplyr::select(mes, dplyr::all_of(x_vars)) |>
+  tsibble::as_tsibble(index = mes)
+
+# Guardamos una versión tibble alineada para usarla en los escenarios
+x_fc_aligned <- new_data_exante |>
+  dplyr::as_tibble()
+
+# 7) Ex–ante (escenario base) de Y con ARIMAX
+fc_exante <- fabletools::forecast(
+  energia_arimax_fit,
+  new_data = new_data_exante
+)
+
+fc_exante
+
+
+```
+
+
+
+
+
+
+
+```{r arimax_escenarios}
+#| echo: false
+# Escenarios con fabletools::scenarios()
+
+# Y y X vigentes
+y_var  <- all.vars(fmla_arimax)[1]
+x_vars <- setdiff(all.vars(fmla_arimax), y_var)
+
+# (escala_opt y escala_pes ya las definiste antes)
+# escala_opt <- 0.97  # -3%
+# escala_pes <- 1.03  # +3%
+
+newdata_scen <- fabletools::scenarios(
+  base = x_fc_aligned |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+
+  optimista = x_fc_aligned |>
+    dplyr::mutate(
+      dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)
+    ) |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+
+  pesimista = x_fc_aligned |>
+    dplyr::mutate(
+      dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)
+    ) |>
+    dplyr::select(mes, dplyr::all_of(x_vars)) |>
+    tsibble::as_tsibble(index = mes),
+
+  names_to = ".scenario"
+)
+
+fc_scen <- fabletools::forecast(
+  energia_arimax_fit,
+  new_data = newdata_scen
+)
+
+fc_scen
+
+```
+
+
+
+```{r graf_base}
+#| warning: false
+# Serie histórica + pronóstico base con bandas de confianza
+
+fc_exante_plt <- fc_exante |>
+  autoplot(
+    energia_reg,
+    level = c(80, 95)
+  ) +
+  labs(
+    title = "Pronóstico ex–ante (escenario base)",
+    x = NULL,
+    y = y_var
+  )
+
+fc_exante_plt
+
+```
+
+
+
+```{r graf_scenarios_todos}
+#| warning: false
+
+fc_scen_medias <- fc_scen |>
+  as_tibble() |>
+  dplyr::select(mes, .scenario, .mean)
+
+fc_scen_medias_plt <- fc_scen_medias |>
+  ggplot2::ggplot(aes(x = mes, y = .mean, colour = .scenario)) +
+  ggplot2::geom_line() +
+  labs(
+    title = "Media de los pronósticos por escenario",
+    x = NULL,
+    y = y_var,
+    colour = "Escenario"
+  )
+
+fc_scen_medias_plt
+
+```
+
+
+
+
