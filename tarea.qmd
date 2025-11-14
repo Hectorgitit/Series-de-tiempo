@@ -267,12 +267,36 @@ fabletools::report(energia_arimax_fit)
 #INDPRO - Producción industrial total de EE. UU. (todos los sectores).
 ```
 
-
-
-
 ## Eliminamos una variable no significativa
 Optimización 1
 
+Eliminamos **WPS0554** indice de precios al productor para gas natural ya que va por la misma linea que el precio del gas natural **MHHNGSP**.
+
+Si le subes el precio al productor el productor te lo sube a ti.
+```{r}
+#| echo: false
+
+# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
+
+var_out <- "WPS0554"   # <-- cambia aquí el nombre a eliminar
+resp <- all.vars(fmla_arimax)[1]
+xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
+stopifnot(length(xs) > 0)
+fmla_arimax <- reformulate(xs, response = resp)
+
+energia_arimax_fit <- energia_reg |>
+fabletools::model(arimax = fable::ARIMA(fmla_arimax))
+
+fabletools::report(energia_arimax_fit)
+
+```
+
+
+## Eliminamos una variable no significativa
+Optimización 2
+
+Quitamos Gas natural por que este consumo es mas una consecuencia de cuanta energia renovable se usa.
+Por que en la practica primero se usa la energia renovable que es mas barata y despues se usa el gas. 
 ```{r}
 #| echo: false
 
@@ -293,7 +317,20 @@ fabletools::report(energia_arimax_fit)
 
 
 ## Eliminamos otra variable no significativa
-Optimización 2
+Optimización 3
+Quitamos **DCOILWTICO** que es precio del petroleo crudo, porque no representa mucho en EE.UU.
+U.S. Energy Information Administration (EIA), que es la agencia oficial de estadísticas de energía de Estados Unidos, menciona que para la generacion electrica en EE.UU. se usa.
+
+-Gas natural: ~43% de la electricidad
+
+-Carbón: ~16%
+
+-Nuclear: ~19%
+
+-Renovables (total): ~21%
+
+-Petróleo (total): ~0.4%]
+
 ```{r}
 #| echo: false
 
@@ -312,37 +349,15 @@ fabletools::report(energia_arimax_fit)
 
 ```
 
-## Eliminamos otra variable no significativa
-Optimización 3
-
-```{r}
-#| echo: false
-
-# Elimina una X, actualiza fórmula y re-ajusta ARIMAX
-
-var_out <- "WPS0554"   # <-- cambia aquí el nombre a eliminar
-resp <- all.vars(fmla_arimax)[1]
-xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
-stopifnot(length(xs) > 0)
-fmla_arimax <- reformulate(xs, response = resp)
-
-energia_arimax_fit <- energia_reg |>
-fabletools::model(arimax = fable::ARIMA(fmla_arimax))
-
-fabletools::report(energia_arimax_fit)
-
-```
-
-
 ## Eliminamos ya la última no significativa
 Optimización 4
-
+Quitamos **CPIENGSL** que es indice de precio al consumidor en la parte de energia ya que para eso  tenemos a **APU000072610** que es precio promedio minorista en EE.UU.
 ```{r}
 #| echo: false
 
 # Elimina una X, actualiza fórmula y re-ajusta ARIMAX
 
-var_out <- "APU000072610"   # <-- cambia aquí el nombre a eliminar
+var_out <- "CPIENGSL"   # <-- cambia aquí el nombre a eliminar
 resp <- all.vars(fmla_arimax)[1]
 xs   <- setdiff(all.vars(fmla_arimax)[-1], var_out)
 stopifnot(length(xs) > 0)
@@ -356,7 +371,9 @@ fabletools::report(energia_arimax_fit)
 ```
 
 ## Reflexión
-En el caso de esta regresión en específico solo eliminares el consumo total de gas natural en EU ya que las demas solo reducen el R cuadrado ajustado, lo cual es lo que se puede explicar de la variable a pronosticar.
+
+
+
 
 ```{r}
 #| echo: false
@@ -395,23 +412,27 @@ acc_test
 #| echo: false
 # EX–ANTE con ARIMAX — horizonte fijo y new_data con misma estructura que el entrenamiento
 
-# 1) Recojo los regresores vigentes (por si quitaste alguno en “Optimización”)
-x_vars <- setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])
+# 1) Recojo Y y las X vigentes (por si quitaste algunas en “Optimización”)
+y_var  <- all.vars(fmla_arimax)[1]
+x_vars <- setdiff(all.vars(fmla_arimax), y_var)
 
 # 2) Último mes observado en el set de entrenamiento del ARIMAX
 ultimo_hist <- max(energia_reg$mes)  # yearmonth
 
-# 3) Plantilla de horizonte: EXACTAMENTE los próximos h_meses (como tsibble)
-fut_index <- tibble::tibble(
-  mes = tsibble::yearmonth(ultimo_hist) + seq_len(h_meses)
-) |> tsibble::as_tsibble(index = mes)
+# 3) Serie histórica de X (en largo), recortada al mismo horizonte del ARIMAX
+x_series <- energia_mensual_tsb |>
+  dplyr::filter(
+    serie %in% x_vars,
+    mes <= ultimo_hist          # 👈 recortamos aquí
+  )
 
-# 4) Pronóstico ARIMA de cada X usando la plantilla (no 'h')
-x_series <- energia_mensual_tsb |> dplyr::filter(serie %in% x_vars)
-x_fit    <- x_series |> fabletools::model(auto = fable::ARIMA(valor))
+# 4) Ajuste ARIMA por cada regresor
+x_fit <- x_series |>
+  fabletools::model(auto = fable::ARIMA(valor))
 
+# 5) Pronóstico ARIMA de cada X usando h = h_meses
 x_fc <- x_fit |>
-  fabletools::forecast(new_data = fut_index) |>   # forzamos fechas futuras correctas
+  fabletools::forecast(h = h_meses) |>
   dplyr::mutate(valor_fc = mean(valor)) |>        # punto (media de la distribución)
   dplyr::as_tibble() |>
   dplyr::select(serie, mes, valor_fc) |>
@@ -419,52 +440,119 @@ x_fc <- x_fit |>
   dplyr::arrange(mes) |>
   dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), as.numeric))
 
-# 5) new_data para ARIMAX:
-#    partimos de 'fut_index' (tsibble) -> pegamos X -> dejamos SOLO mes + X
-#    y RECONVERTIMOS a tsibble (esto evita el error de "different key structure")
-new_data_exante <- fut_index |>
-  dplyr::left_join(x_fc, by = "mes") |>
+# 6) new_data para ARIMAX: tsibble con mes + X pronosticadas
+new_data_exante <- x_fc |>
   dplyr::select(mes, dplyr::all_of(x_vars)) |>
-  tsibble::as_tsibble(index = mes)   # << clave: mismo index/key que el modelo
+  tsibble::as_tsibble(index = mes)
 
-# 6) Ex–ante (base) de Y con ARIMAX
+# Guardamos una versión tibble alineada para usarla en los escenarios
+x_fc_aligned <- new_data_exante |>
+  dplyr::as_tibble()
+
+# 7) Ex–ante (escenario base) de Y con ARIMAX
 fc_exante <- fabletools::forecast(
   energia_arimax_fit,
   new_data = new_data_exante
 )
 
 fc_exante
+
+
 ```
 
 
 
 
-```{r}
+
+
+
+```{r arimax_escenarios}
 #| echo: false
 # Escenarios con fabletools::scenarios()
 
-# Por seguridad, vuelvo a tomar los regresores vigentes
-x_vars <- setdiff(all.vars(fmla_arimax), all.vars(fmla_arimax)[1])
+# Y y X vigentes
+y_var  <- all.vars(fmla_arimax)[1]
+x_vars <- setdiff(all.vars(fmla_arimax), y_var)
 
-escala_opt <- 0.97  # -3%
-escala_pes <- 1.03  # +3%
+# (escala_opt y escala_pes ya las definiste antes)
+# escala_opt <- 0.97  # -3%
+# escala_pes <- 1.03  # +3%
 
 newdata_scen <- fabletools::scenarios(
-  base =  x_fc_aligned |>
+  base = x_fc_aligned |>
     dplyr::select(mes, dplyr::all_of(x_vars)) |>
     tsibble::as_tsibble(index = mes),
+
   optimista = x_fc_aligned |>
-    dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)) |>
+    dplyr::mutate(
+      dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_opt)
+    ) |>
     dplyr::select(mes, dplyr::all_of(x_vars)) |>
     tsibble::as_tsibble(index = mes),
+
   pesimista = x_fc_aligned |>
-    dplyr::mutate(dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)) |>
+    dplyr::mutate(
+      dplyr::across(dplyr::all_of(x_vars), ~ .x * escala_pes)
+    ) |>
     dplyr::select(mes, dplyr::all_of(x_vars)) |>
     tsibble::as_tsibble(index = mes),
+
   names_to = ".scenario"
 )
 
-fc_scen <- fabletools::forecast(energia_arimax_fit, new_data = newdata_scen)
+fc_scen <- fabletools::forecast(
+  energia_arimax_fit,
+  new_data = newdata_scen
+)
+
 fc_scen
+
 ```
+
+
+
+```{r graf_base}
+#| warning: false
+# Serie histórica + pronóstico base con bandas de confianza
+
+fc_exante_plt <- fc_exante |>
+  autoplot(
+    energia_reg,
+    level = c(80, 95)
+  ) +
+  labs(
+    title = "Pronóstico ex–ante (escenario base)",
+    x = NULL,
+    y = y_var
+  )
+
+fc_exante_plt
+
+```
+
+
+
+```{r graf_scenarios_todos}
+#| warning: false
+
+fc_scen_medias <- fc_scen |>
+  as_tibble() |>
+  dplyr::select(mes, .scenario, .mean)
+
+fc_scen_medias_plt <- fc_scen_medias |>
+  ggplot2::ggplot(aes(x = mes, y = .mean, colour = .scenario)) +
+  ggplot2::geom_line() +
+  labs(
+    title = "Media de los pronósticos por escenario",
+    x = NULL,
+    y = y_var,
+    colour = "Escenario"
+  )
+
+fc_scen_medias_plt
+
+```
+
+
+
 
