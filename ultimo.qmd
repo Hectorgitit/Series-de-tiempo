@@ -555,5 +555,34 @@ fc_scen_medias_plt
 ```
 
 
+```{r arimax_insample}
+# Pronóstico in-sample del ARIMAX (ajuste sobre toda la muestra)
 
+arimax_insample <- energia_arimax_fit |>
+  fabletools::augment()
+
+# Imprimimos solo fecha, valor observado y valor ajustado
+arimax_insample |>
+  dplyr::select(mes, dplyr::all_of(y_var), .fitted)
+
+```
+
+```{r graf_insample}
+# Pronóstico in-sample: observada vs ajustada por el ARIMAX
+
+arimax_insample <- energia_arimax_fit |>
+  fabletools::augment()
+
+graf_insample <- arimax_insample |>
+  ggplot2::ggplot(aes(x = mes)) +
+  ggplot2::geom_line(aes(y = .data[[y_var]])) +
+  ggplot2::geom_line(aes(y = .fitted), linetype = "dashed") +
+  ggplot2::labs(
+    title = "ARIMAX – ajuste in-sample",
+    x = NULL,
+    y = y_var
+  )
+
+graf_insample
+```
 
