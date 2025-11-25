@@ -1,0 +1,334 @@
+---
+title: "Tarea Bootstraping"
+format: html
+editor: visual
+---
+
+
+## Ejercicio
+
+
+```{r}
+library(tsibble)
+library(tsibbledata)
+library(fable)
+library(fabletools)
+library(feasts)
+library(dplyr)
+library(ggplot2)
+library(plotly)
+# Para bagging
+library(forecast)     # paquete forecast clásico (para baggedModel)
+# Para prophet en tidyverts
+library(fable.prophet)  # si lo usan en el curso
+```
+
+
+
+```{r}
+licores <- aus_retail |> 
+  filter(Industry == "Liquor retailing") |> 
+  summarise(Turnover = sum(Turnover))
+
+licores_train <- licores |> 
+  filter_index(. ~ "2016 Q4")
+
+licores_train |> 
+  autoplot(Turnover)
+```
+
+1. Utilizar de entrenamiento hasta 2016 Q4.
+2. Modelar la serie de venta de licores en Australia utilizando la técnica de Bootstrapping + Bagging (con ETS o el modelo de su preferencia).
+3. Comparar los resultados con
+  - un modelo ETS estándar sin bootstrap
+  - un modelo ARIMA estándar sin bootstrap
+  - un modelo hecho a partir de una descomposición STL (ustedes eligen los modelos a utilizar para cada componente)
+  - un modelo de regresión armónica dinámica
+  - Prophet
+4. Evaluar el ajuste de los modelos utilizando MAPE.
+5. Producir pronósticos a **2 años** y evaluar los errores de pronóstico con MAPE.
+  - Si lo ven conveniente, pueden generar combinaciones de los modelos realizados.
+6. Obtener conclusiones sobre cuál(es) modelo(s) fueron mejores.
+
+
+
+
+```{r}
+#| message: false
+
+library(tidyverse)
+library(fpp3)
+library(ggtime)  # si lo usas en otras partes del doc
+
+# Serie mensual de ventas de licores en Australia (agregando estados)
+
+licores_au <- aus_retail |>
+filter(Industry == "Liquor retailing") |>
+summarise(Turnover = sum(Turnover))   # suma sobre States, mantiene índice Month
+
+licores_au |> autoplot(Turnover) +
+labs(title = "Ventas de licores en Australia",
+y = "Turnover (millones AUD)")
+
+# Entrenamiento hasta 2016 Q4 (≃ 2016 Dec para serie mensual)
+
+licores_au_train <- licores_au |>
+filter_index(. ~ "2016 Dec")
+
+licores_au_train |> autoplot(Turnover) +
+labs(title = "Ventas de licores - Datos de entrenamiento (hasta 2016Q4)",
+y = "Turnover (millones AUD)")
+
+```
+
+
+
+```{r}
+# Modelo STL sobre la serie de entrenamiento
+
+licores_au_stl <- licores_au_train |>
+model(stl = STL(Turnover))
+
+licores_au_stl |>
+components() |>
+autoplot() +
+labs(title = "Descomposición STL - Licores",
+y = NULL)
+
+```
+
+
+```{r}
+# Simulación bootstrap con bloques (STL residual bootstrap)
+
+# Sugerencia: para mensual, usar bloques ≈ 12 para preservar estacionalidad anual.
+
+licores_au_sim <- licores_au_stl |>
+generate(
+new_data = licores_au_train,
+times = 100,                 # número de réplicas bootstrap
+bootstrap_block_size = 12    # tamaño del bloque (ajústalo si quieres)
+) |>
+select(-.model, -Turnover)
+
+licores_au_sim
+
+```
+
+
+
+```{r}
+# Visualizar algunas trayectorias bootstrapped
+
+licores_au_sim |>
+autoplot(.sim) +
+autolayer(licores_au_train, Turnover) +
+guides(colour = "none") +
+labs(
+title = "Ventas de licores: series bootstrapped (STL + block bootstrap)",
+y = "Turnover (millones AUD)"
+)
+
+```
+
+```{r}
+(
+  licores_au_sim |>
+    autoplot(.sim) +
+    autolayer(licores_au_train, Turnover) +
+    guides(colour = "none") +
+    labs(
+      title = "Ventas de licores: series bootstrapped (STL + block bootstrap)",
+      y = "Turnover (millones AUD)"
+    )
+) |>
+  ggplotly() |>
+  layout(
+    xaxis = list(
+      rangeslider = list(visible = TRUE)
+    )
+  )
+```
+
+
+
+```{r}
+# Pronósticos ETS sobre cada réplica bootstrap (h = 2 años)
+
+licores_au_ets_boot_fc <- licores_au_sim |>
+model(ets = ETS(.sim)) |>
+forecast(h = "2 years")
+
+licores_au_ets_boot_fc
+
+```
+
+
+
+```{r}
+# Opcional: ver abanico de pronósticos bootstrapped
+(
+  licores_au_ets_boot_fc |>
+    update_tsibble(key = .rep) |>
+    autoplot(.mean) +
+    autolayer(licores_au, Turnover) +
+    guides(colour = "none") +
+    labs(
+      title = "Ventas de licores: pronósticos bootstrapped ETS",
+      y = "Turnover (millones AUD)"
+    )
+) |>
+  ggplotly() |>
+  layout(
+    xaxis = list(
+      rangeslider = list(visible = TRUE)
+    )
+  )
+
+```
+
+
+
+
+```{r}
+# Bagging: promedio de los pronósticos ETS over réplicas
+
+licores_au_bagged_fc <- licores_au_ets_boot_fc |>
+summarise(bagged_mean = mean(.mean))
+
+# Comparar visualmente con un ETS estándar (sin bootstrap)
+
+licores_au |>
+model(ets = ETS(Turnover)) |>
+forecast(h = "2 years") |>
+autoplot(licores_au) +
+autolayer(licores_au_bagged_fc, bagged_mean, color = "firebrick") +
+labs(
+title = "Ventas de licores: ETS estándar vs Bagged ETS (STL bootstrap)",
+y = "Turnover (millones AUD)"
+)
+
+```
+
+
+
+```{r}
+licores_au_fit <- licores_au_train |>
+model(
+# ETS estándar
+ets = ETS(Turnover),
+# ARIMA auto
+arima = ARIMA(Turnover),
+
+# Modelo a partir de STL: ETS sobre tendencia + ARIMA en remainder (ejemplo)
+stl = decomposition_model(
+  STL(Turnover ~ season(window = "periodic")),
+  season_adjust ~ ETS(season_adjust),
+  remainder     ~ ARIMA(remainder)
+),
+
+# Regresión armónica dinámica (Fourier + ARIMA)
+dhr = ARIMA(
+  Turnover ~ fourier(period = "year", K = 3)
+),
+
+# Prophet
+prophet = prophet(
+  Turnover ~ growth("linear") + season("year")
+)
+
+)
+
+report(licores_au_fit)
+```
+
+
+```{r}
+licores_au_acc_train <- licores_au_fit |>
+accuracy()
+
+licores_au_acc_train |>
+select(.model, MAPE) |>
+arrange(MAPE)
+
+```
+
+
+
+
+```{r}
+licores_au_fc <- licores_au_fit |>
+forecast(h = "2 years")
+
+licores_au_fc |>
+autoplot(licores_au) +
+labs(
+title = "Pronósticos a 2 años - Modelos comparativos",
+y = "Turnover (millones AUD)"
+)
+
+```
+
+
+
+```{r}
+licores_au_acc_test <- licores_au_fc |>
+accuracy(licores_au)
+
+licores_au_acc_test |>
+select(.model, MAPE) |>
+arrange(MAPE)
+
+```
+
+
+
+
+```{r}
+# Datos reales de test (2017-2018)
+
+licores_au_test <- licores_au |>
+filter_index("2017 Jan" ~ "2018 Dec")
+
+# Calcular MAPE de pronóstico para el bagged ETS
+
+licores_au_bagged_acc_test <- licores_au_bagged_fc |>
+left_join(licores_au_test, by = "Month") |>
+summarise(
+.model = "bagged_ets_stl",
+MAPE = mean(abs((Turnover - bagged_mean) / Turnover)) * 100
+)
+
+licores_au_bagged_acc_test
+
+```
+
+
+
+
+
+```{r}
+licores_au_bagged_acc_test <- licores_au_bagged_fc |>
+  left_join(licores_au_test, by = "Month") |>
+  summarise(
+    .model = "bagged_ets_stl",
+    MAPE = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
+  ) |>
+  as_tibble()   # <--- MUY IMPORTANTE
+
+# Ahora sí, combinar todo
+licores_au_acc_test_todos <- licores_au_acc_test |>
+  as_tibble() |>
+  select(.model, MAPE) |>
+  bind_rows(licores_au_bagged_acc_test) |>
+  arrange(MAPE)
+
+licores_au_acc_test_todos
+
+```
+
+
+
+
+
+
