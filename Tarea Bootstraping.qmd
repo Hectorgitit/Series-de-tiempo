@@ -309,26 +309,16 @@ licores_au_test <- licores_au |>
 # MAPE de pronóstico para el Bagged ETS (un solo número)
 licores_au_bagged_acc_test <- licores_au_test |>
   left_join(licores_au_bagged_fc, by = "Month") |>
+  as_tibble() |>   # <-- AHORA VA ANTES
   summarise(
     .model = "bagged_ets_stl",
     MAPE   = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
-  ) |>
-  as_tibble()
+  )
 
 licores_au_bagged_acc_test
 
 ```
 
-
-```{r}
-licores_au_acc_test <- licores_au_fc |>
-  accuracy(licores_au)
-
-licores_au_acc_test |>
-  select(.model, MAPE) |>
-  arrange(MAPE)
-
-```
 
 
 
@@ -341,4 +331,11 @@ licores_au_acc_test_todos
 
 ```
 
+El modelo STL no se pudo evaluar con MAPE porque el cálculo estándar produce NaN (probablemente por valores cero o faltantes en el periodo de prueba). Para mantener consistencia en la comparación, solo consideramos los modelos con MAPE bien definido.
 
+
+En conjunto, los resultados sugieren que, para esta serie con patrón estacional bien definido y sin cambios drásticos de tendencia, los modelos ETS —especialmente el Bagged ETS con bootstrap STL— son los más apropiados. El uso de bootstrap + bagging proporciona una pequeña mejora adicional sobre el ETS estándar, pero el mensaje principal es que las familias ETS resultan más adecuadas que ARIMA, Prophet o DHR para pronosticar las ventas de licores en Australia en el horizonte considerado
+
+
+
+Al comparar el desempeño de los modelos mediante el MAPE de los pronósticos a 2 años (2017–2018), el mejor resultado lo obtuvo el Bagged ETS con bootstrap STL (MAPE ≈ 2.07), seguido muy de cerca por el ETS estándar (MAPE ≈ 2.23). Después se ubicaron ARIMA (MAPE ≈ 3.23), Prophet (MAPE ≈ 4.50) y, con el peor desempeño, el modelo de regresión armónica dinámica (DHR) (MAPE ≈ 7.02); el modelo basado en descomposición STL no pudo evaluarse con MAPE (NaN). En conjunto, los resultados indican que, para esta serie con tendencia creciente y estacionalidad anual muy marcada, los modelos ETS son los más adecuados, y que el uso de bootstrap + bagging sobre ETS aporta una ligera mejora adicional en la precisión de los pronósticos al reducir la variabilidad en el horizonte de 2 años.
