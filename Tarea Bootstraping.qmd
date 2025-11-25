@@ -258,14 +258,22 @@ arrange(MAPE)
 
 ```{r}
 licores_au_fc <- licores_au_fit |>
-forecast(h = "2 years")
+  forecast(h = "2 years")
 
-licores_au_fc |>
-autoplot(licores_au) +
-labs(
-title = "Pronósticos a 2 años - Modelos comparativos",
-y = "Turnover (millones AUD)"
-)
+(
+  licores_au_fc |>
+    autoplot(licores_au) +
+    labs(
+      title = "Pronósticos a 2 años - Modelos comparativos",
+      y = "Turnover (millones AUD)"
+    )
+) |>
+  ggplotly() |>
+  layout(
+    xaxis = list(
+      rangeslider = list(visible = TRUE)
+    )
+  )
 
 ```
 
