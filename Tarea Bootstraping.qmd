@@ -277,15 +277,22 @@ licores_au_fc <- licores_au_fit |>
 
 ```
 
+```{r}
+rm(
+  licores_au_acc_test,
+  licores_au_bagged_acc_test,
+  licores_au_acc_test_todos
+)
+```
 
 
 ```{r}
 licores_au_acc_test <- licores_au_fc |>
-accuracy(licores_au)
+  accuracy(licores_au) |>
+  as_tibble() |>
+  select(.model, MAPE)
 
-licores_au_acc_test |>
-select(.model, MAPE) |>
-arrange(MAPE)
+licores_au_acc_test
 
 ```
 
@@ -295,22 +302,20 @@ arrange(MAPE)
 
 
 ```{r}
-licores_au_bagged_acc_test <- licores_au_bagged_fc |>
-  left_join(licores_au_test, by = "Month") |>
+# Datos reales de test (2017–2018)
+licores_au_test <- licores_au |>
+  filter_index("2017 Jan" ~ "2018 Dec")
+
+# MAPE de pronóstico para el Bagged ETS (un solo número)
+licores_au_bagged_acc_test <- licores_au_test |>
+  left_join(licores_au_bagged_fc, by = "Month") |>
   summarise(
     .model = "bagged_ets_stl",
-    MAPE = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
+    MAPE   = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
   ) |>
-  as_tibble()   # <--- MUY IMPORTANTE
+  as_tibble()
 
-# Ahora sí, combinar todo
-licores_au_acc_test_todos <- licores_au_acc_test |>
-  as_tibble() |>
-  select(.model, MAPE) |>
-  bind_rows(licores_au_bagged_acc_test) |>
-  arrange(MAPE)
-
-licores_au_acc_test_todos
+licores_au_bagged_acc_test
 
 ```
 
@@ -322,22 +327,6 @@ licores_au_acc_test <- licores_au_fc |>
 licores_au_acc_test |>
   select(.model, MAPE) |>
   arrange(MAPE)
-
-```
-
-```{r}
-# Datos reales de test (2017-2018)
-licores_au_test <- licores_au |>
-  filter_index("2017 Jan" ~ "2018 Dec")
-
-# MAPE del bagged ETS
-licores_au_bagged_acc_test <- licores_au_bagged_fc |>
-  left_join(licores_au_test, by = "Month") |>
-  summarise(
-    .model = "bagged_ets_stl",
-    MAPE = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
-  ) |>
-  as_tibble()
 
 ```
 
