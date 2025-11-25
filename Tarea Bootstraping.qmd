@@ -292,27 +292,6 @@ arrange(MAPE)
 
 
 
-```{r}
-# Datos reales de test (2017-2018)
-
-licores_au_test <- licores_au |>
-filter_index("2017 Jan" ~ "2018 Dec")
-
-# Calcular MAPE de pronóstico para el bagged ETS
-
-licores_au_bagged_acc_test <- licores_au_bagged_fc |>
-left_join(licores_au_test, by = "Month") |>
-summarise(
-.model = "bagged_ets_stl",
-MAPE = mean(abs((Turnover - bagged_mean) / Turnover)) * 100
-)
-
-licores_au_bagged_acc_test
-
-```
-
-
-
 
 
 ```{r}
@@ -336,7 +315,41 @@ licores_au_acc_test_todos
 ```
 
 
+```{r}
+licores_au_acc_test <- licores_au_fc |>
+  accuracy(licores_au)
+
+licores_au_acc_test |>
+  select(.model, MAPE) |>
+  arrange(MAPE)
+
+```
+
+```{r}
+# Datos reales de test (2017-2018)
+licores_au_test <- licores_au |>
+  filter_index("2017 Jan" ~ "2018 Dec")
+
+# MAPE del bagged ETS
+licores_au_bagged_acc_test <- licores_au_bagged_fc |>
+  left_join(licores_au_test, by = "Month") |>
+  summarise(
+    .model = "bagged_ets_stl",
+    MAPE = mean(abs((Turnover - bagged_mean) / Turnover), na.rm = TRUE) * 100
+  ) |>
+  as_tibble()
+
+```
 
 
+
+```{r}
+licores_au_acc_test_todos <- licores_au_acc_test |>
+  bind_rows(licores_au_bagged_acc_test) |>
+  arrange(MAPE)
+
+licores_au_acc_test_todos
+
+```
 
 
