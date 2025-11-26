@@ -1,0 +1,174 @@
+---
+title: "Proyecto final Series de Tiempo 2025 Otoño Invierno"
+format: 
+  revealjs:
+    scrollable: true
+    incremental: true
+    smaller: true
+    theme: default
+    embed-resources: true
+execute:
+  echo: true
+  output-location: column-fragment
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(tidyquant)
+library(tidyverse)
+library(tsibble)
+library(fable)
+library(fabletools)
+library(feasts)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(glue)
+library(ggtime)
+library(plotly)
+```
+
+##Tienda Delicatessen
+Vende principalmente **embutidos** (**carnes frías**) y **quesos** y productos derivados de ello (charolas de carnes frías/quesos, baguettes, etc.).
+
+
+Tiene horario de lunes a viernes de 10:00 a 19:00 horas y sábados de 10:00 a 15:00 horas (cerrada los domingos).
+
+```{r}
+load("C:/Users/hecto/OneDrive - ITESO/Series de tiempo/Series-de-tiempo/proyecto_final.RData")
+datos_tsb
+```
+
+
+```{r}
+ventas_hora_plt <- datos_tsb |>
+  ggplot(aes(x = fecha, y = total)) +
+  geom_line()
+```
+
+
+```{r}
+ventas_tienda <- datos_tsb |>
+  mutate(
+    hour = floor_date(fecha, unit = "hour")  # por si hubiera minutos/segundos
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)   # ventas totales por hora
+  ) |>
+  mutate(
+    day_type = case_when(
+      wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+      TRUE ~ "Weekday"
+    ),
+    work_day = day_type == "Weekday"
+  )
+```
+
+
+
+```{r}
+p_ventas <- ventas_tienda |>
+  autoplot(total) +
+  labs(
+    title = "Ventas por hora de la tienda",
+    x = "Fecha y hora",
+    y = "Total"
+  )
+
+p_ventas_int <- ggplotly(p_ventas, dynamicTicks = TRUE) |>
+  rangeslider()   # de plotly
+
+p_ventas_int
+```
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
