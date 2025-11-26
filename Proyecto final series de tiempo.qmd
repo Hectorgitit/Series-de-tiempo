@@ -89,27 +89,171 @@ p_ventas_int
 
 
 ```{r}
+library(fpp3)
+library(plotly)
+library(fable.prophet)
+
+# 1) Agregar por hora (por si hay varios folios en la misma hora)
+ventas_tienda <- datos_tsb |>
+  mutate(
+    hour = lubridate::floor_date(fecha, unit = "hour")
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)
+  ) |>
+  mutate(
+    day_type = dplyr::case_when(
+      lubridate::wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+      TRUE ~ "Weekday"
+    ),
+    work_day = day_type == "Weekday"
+  )
+
+# 2) (opcional) entrenamiento = todo lo observado
+ventas_tienda_train <- ventas_tienda
+
+# 3) Horizonte: horas hasta el último día de noviembre 2025
+last_obs   <- max(ventas_tienda$hour)
+target_end <- lubridate::ymd_h("2025-11-30 23")
+
+h_ventas <- as.numeric(
+  difftime(target_end, last_obs, units = "hours")
+)
+
+h_ventas   # número de pasos a pronosticar
+
+```
+
+
+
+```{r}
+# 1.1 Descomposición STL (puedes hacerla más elaborada si quieres)
+ventas_stl <- ventas_tienda_train |>
+  model(
+    stl = STL(
+      total ~ season(window = "periodic")
+    )
+  )
+
+# 1.2 Generar réplicas bootstrap (block bootstrap)
+ventas_sim <- ventas_stl |>
+  generate(
+    new_data = ventas_tienda_train,
+    times = 100,                 # réplicas bootstrap
+    bootstrap_block_size = 24*7  # bloque = 1 semana
+  ) |>
+  select(-.model, -total)
+
+# 1.3 ETS sobre cada réplica y pronósticos hasta noviembre 2025
+#ventas_ets_boot_fc <- ventas_sim |>
+  #model(ets = ETS(.sim)) |>
+  #forecast(h = h_ventas)
+
+
+
+```
+
+
+
+```{r}
+ventas_tienda_fit <- ventas_tienda_train |>
+  model(
+    # 1) Seasonal naive (por ejemplo, estacionalidad diaria)
+    snaive_day = SNAIVE(total ~ lag("day")),
+
+    # 2) ETS estándar
+    ets = ETS(total),
+
+    # 3) ARIMA estándar
+    arima = ARIMA(total),
+
+    # 4) Modelo basado en STL
+    stl = decomposition_model(
+      STL(total ~ season(window = "periodic")),
+      season_adjust ~ ETS(season_adjust),
+      remainder     ~ ARIMA(remainder)
+    ),
+
+    # 5) Regresión armónica dinámica (Fourier + ARIMA)
+    #dhr = ARIMA(
+      #total ~ fourier("day", K = 5) +
+               #fourier("week", K = 3) +
+               #work_day
+    #),
+
+    # 6) Prophet
+    prophet = prophet(
+      total ~ growth("linear") +
+        season("week") +
+        season("year")
+    ),
+
+    # 7) Combinación simple (promedio de varios modelos)
+    combo = (ETS(total) + ARIMA(total) +
+             prophet(total ~ growth("linear") + season("week") + season("year"))
+            ) / 3
+  )
+
+report(ventas_tienda_fit)
+
+```
+
+
+
+```{r}
+ventas_tienda_fc <- ventas_tienda_fit |>
+  forecast(h = h_ventas)
+
+```
+
+
+
+```{r}
+p_fc_ventas <- ventas_tienda_fc |>
+  autoplot(ventas_tienda) +
+  autolayer(ventas_bagged_fc, bagged_mean, colour = "red") +
+  labs(
+    title = "Pronósticos de ventas por hora hasta Noviembre 2025",
+    y = "Total",
+    x = "Fecha y hora"
+  )
+
+p_fc_ventas
+
+```
+
+
+
+```{r}
+p_fc_ventas_int <- p_fc_ventas |>
+  ggplotly(dynamicTicks = TRUE) |>
+  layout(
+    xaxis = list(
+      rangeslider = list(visible = TRUE)
+    )
+  )
+
+p_fc_ventas_int
 
 ```
 
 
 
 
+```{r}
+# Accuracy en entrenamiento
+ventas_acc_train <- ventas_tienda_fit |>
+  accuracy()
 
+ventas_acc_train |>
+  select(.model, MAPE) |>
+  arrange(MAPE)
 
+# Accuracy en todo el periodo conocido usando los pronósticos (tipo test),
+# si defines explícitamente un conjunto de test.
 
-
-
-
-
-
-
-
-
-
-
-
-
+```
 
 
 
