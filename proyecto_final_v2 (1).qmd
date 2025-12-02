@@ -1,0 +1,281 @@
+---
+title: "Proyecto final Series de Tiempo 2025 Otoño Invierno"
+format: 
+  revealjs:
+    scrollable: true
+    incremental: true
+    smaller: true
+    theme: default
+    embed-resources: true
+execute:
+  echo: true
+  output-location: column-fragment
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(tidyquant)
+library(tidyverse)
+library(tsibble)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(glue)
+library(ggtime)
+library(plotly)
+library(fpp3)
+library(fable)
+library(fabletools)
+library(feasts)
+```
+
+## Tienda Delicatessen
+
+Vende principalmente **embutidos** (**carnes frías**) y **quesos** y productos derivados de ello (charolas de carnes frías/quesos, baguettes, etc.).
+
+Tiene horario de lunes a viernes de 10:00 a 19:00 horas y sábados de 10:00 a 15:00 horas (cerrada los domingos).
+
+```{r}
+load("proyecto_final.RData")
+datos_tsb
+
+datos_tsb |> 
+  autoplot(total)
+```
+
+## Tratamiento de Datos
+
+```{r}
+ventas <- datos_tsb |>
+  mutate(
+    hour = floor_date(fecha, unit = "hour")  # por si hubiera minutos/segundos
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)   # ventas totales por hora
+  )
+ventas
+```
+
+### Tratamiento de Outliers
+
+```{r}
+ventas |> gg_tsdisplay(total)
+
+```
+
+#### Comportamiento general
+
+-   La mayoría de los valores horarios están **entre 0 y 2 000 unidades**.
+
+-   Hay **picos extremadamente altos** (20 000, 40 000, 70 000+), lo que indica **outliers claros**
+
+#### Tipo de Outlier
+
+Dada la magnitud y rareza: Son probablemente **aditivos**, es decir valores puntuales anómalos, no parecen cambios estructurales ni patrones recurrentes.
+
+El gráfico ACF tiene un pico muy alto en en lag 1, sugiriendo una estacionalidad horaria alta, de la misma forma en el lag 24; marcando la estacionalidad diaria. Para hacer el tratamiento de outliers se hará una descomposición de la serie utilizando STL, los outliers se determinarán con el componente de residuo con la siguiente lógica:
+
+Outlier si se cumple: `|remainder| > 3*sd(remainder)`
+
+```{r}
+ventas_stl <- ventas |>
+  model(stl = STL(total ~ season(window = "periodic")))
+
+ventas_stl |>
+  components() |>
+  autoplot()
+
+ventas_stl_components <- components(ventas_stl)
+
+ventas_outliers <- ventas_stl_components |>
+  as_tibble() |>
+  mutate(
+    is_outlier = remainder < quantile(remainder, 0.25) - 3 * IQR(remainder) |
+                 remainder > quantile(remainder, 0.75) + 3 * IQR(remainder)
+  ) |>
+  as_tsibble(index = hour)
+  
+
+
+ventas_outliers |>
+  ggplot(aes(x = hour, y = total, color = is_outlier)) +
+  geom_point()
+
+
+
+```
+
+```{r}
+#ventas_clean <- ventas_outliers |>
+#  mutate(
+#    total = if_else(is_outlier, NA_real_, total)
+#  ) |>
+#  as_tsibble(index = hour)
+
+ventas_clean <- ventas_outliers |>
+  
+  # 1. Quitar los outliers para crear huecos
+  mutate(total = if_else(is_outlier, NA_real_, total)) |>
+  
+  # 2. Asegurar que todos los huecos queden explícitos
+  fill_gaps() |>
+  
+  # 3. Ajustar ARIMA permitiendo NA
+  model(arima = ARIMA(total)) |>
+  
+  # 4. Interpolar usando el modelo
+  interpolate(
+    ventas_outliers |>
+      mutate(total = if_else(is_outlier, NA_real_, total)) |>
+      fill_gaps()
+  ) |>
+  
+  # 5. Convertir a tsibble para poder modificar la columna imputada
+  as_tsibble(index=hour) |>
+  
+  # 6. Reemplazar cualquier valor negativo interpolado por 0
+  mutate(total = pmax(total, 0))
+
+
+
+ventas_clean |> 
+  autoplot(total)
+
+```
+
+```{r}
+ventas_tienda <- ventas_clean |>
+  mutate(
+    hour = floor_date(hour, unit = "hour")  # por si hubiera minutos/segundos
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)   # ventas totales por hora
+  ) |>
+  mutate(
+    day_type = case_when(
+      wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+      TRUE ~ "Weekday"
+    ),
+    work_day = day_type == "Weekday"
+  )
+
+ventas_tienda
+```
+
+## Modelos
+
+Separación de train y test:
+
+```{r}
+ventas_tienda_train <- ventas_tienda |>
+  filter_index(. ~ "2025-04-08 19:00:00")
+
+ventas_tienda_test <- ventas_tienda |>
+  filter_index("2025-04-08 20:00:00" ~ .)
+
+```
+
+```{r}
+# 2) (opcional) entrenamiento = todo lo observado
+#ventas_tienda_train <- ventas_tienda
+
+# 3) Horizonte: horas hasta el último día de noviembre 2025
+last_obs   <- max(ventas_tienda_train$hour)
+target_end <- lubridate::ymd_h("2025-05-08 23") #1 mes por fines prácticos del modelo
+
+h_ventas <- as.numeric(
+  difftime(target_end, last_obs, units = "hours")
+)
+
+h_ventas  
+```
+
+### Transformación matemática
+
+```{r}
+ventas_tienda_train <- ventas_tienda_train |>
+  mutate(
+    weekday_dummy = if_else(day_type == "Weekday", 1, 0),
+    hour_of_day = factor(lubridate::hour(hour))
+  )
+ventas_tienda_test <- ventas_tienda_test |>
+  mutate(
+    weekday_dummy = if_else(day_type == "Weekday", 1, 0),
+    hour_of_day = factor(lubridate::hour(hour))
+  )
+
+```
+
+```{r}
+ventas_tienda_fit <- ventas_tienda_train |> 
+  model(
+    tslm = TSLM(log(total + 1) ~ trend() + season()),
+    tslm2 = TSLM(log(total + 1) ~ trend() + season("day") + weekday_dummy + work_day),
+    tslm3 = TSLM(log(total + 1) ~ trend() +fourier(K = 3) + weekday_dummy + work_day + 
+    lag(log(total + 1), 24)+lag(log(total+1), 168)),
+    benchmark = decomposition_model(
+      STL(log(total + 1) ~ season("day") + season("week"), robust = TRUE),
+      MEAN(season_adjust)),
+    # ARIMA + regresor hour_of_day
+    arima_hod = ARIMA(log(total + 1) ~ hour_of_day),
+
+    # ETS sobre STL desestacionalizado (no usa hour_of_day)
+    stl_ets = decomposition_model(
+      STL(log(total + 1) ~ season(window = "periodic"), robust = TRUE),
+      ETS(season_adjust)
+    ),
+
+    # TSLM con hour_of_day
+    tslm_hod = TSLM(log(total + 1) ~ trend() + hour_of_day)
+  )
+  
+```
+
+### Forecast
+
+```{r}
+#| warning: false
+fc <- ventas_tienda_fit |> 
+  forecast(new_data = ventas_tienda_test)
+
+
+```
+
+### Métricas de Desempeño
+
+```{r}
+fc |> 
+  accuracy(ventas_tienda_test) |> 
+  arrange(MAE)
+```
+
+### Visualización
+
+```{r}
+p <- fc |> 
+  autoplot(ventas_tienda_test,level = NULL) 
+
+plotly::ggplotly(p)
+
+```
+
+## Conclusiones
+
+Conclusiones \[...\]
+
+### Exportación del modelo
+
+```{r}
+equipo_6 <- fc |> 
+  filter(.model == "tslm2")
+  
+
+save(equipo_6, file = "fc_equipo_6.RData")
+```
