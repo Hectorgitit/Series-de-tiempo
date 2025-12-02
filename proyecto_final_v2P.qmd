@@ -163,10 +163,10 @@ ventas_tienda
 
 
 ventas_tienda_train <- ventas_tienda |>
-  filter(hour < ymd_h(". ~ 2025-04-08 19"))
+  filter(hour < ymd_h("2025-11-30 19"))
 
 ventas_tienda_test <- ventas_tienda |>
-  filter(hour > ymd_h("2025-04-08 19"))
+  filter(hour > ymd_h("2025-11-30 19"))
 ```
 
 
@@ -249,6 +249,36 @@ p <- fc |>
 plotly::ggplotly(p)
 
 ```
+
+
+
+```{r}
+library(lubridate)
+
+# Horizonte: 1 mes hacia adelante desde el último dato
+
+ventas_tienda_future <- new_data(ventas_tienda, h = "1 month") |>
+mutate(
+day_type = case_when(
+wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+TRUE ~ "Weekday"
+),
+work_day = day_type == "Weekday",
+weekday_dummy = if_else(day_type == "Weekday", 1, 0)
+)
+
+# (Opcional) Si quieres cortar explícitamente al último día de noviembre:
+
+ventas_tienda_future <- ventas_tienda_future |>
+filter(hour <= ymd_h("2025-11-30 19"))  # ajusta la hora final si hace falta
+
+# Pronóstico de 1 mes (final)
+
+fc_1mes <- ventas_tienda_full_fit |>
+forecast(new_data = ventas_tienda_future)
+
+```
+
 
 ## Conclusiones {background-gradient="linear-gradient(to bottom, #283b95, #17b2c3)"}
 
