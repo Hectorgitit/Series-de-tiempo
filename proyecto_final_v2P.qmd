@@ -41,7 +41,7 @@ Vende principalmente **embutidos** (**carnes frías**) y **quesos** y productos 
 Tiene horario de lunes a viernes de 10:00 a 19:00 horas y sábados de 10:00 a 15:00 horas (cerrada los domingos).
 
 ```{r}
-load("proyecto_final.RData")
+load("C:/Users/hecto/Downloads/proyecto_final (1).RData")
 datos_tsb
 
 datos_tsb |> 
@@ -59,7 +59,8 @@ ventas <- datos_tsb |>
   summarise(
     total = sum(total)   # ventas totales por hora
   )
-ventas
+ventas |> 
+  tail()
 ```
 
 
@@ -163,10 +164,10 @@ ventas_tienda
 
 
 ventas_tienda_train <- ventas_tienda |>
-  filter(hour < ymd_h("2025-11-30 19"))
+  filter(hour < ymd_h("2025-10-31 19"))
 
 ventas_tienda_test <- ventas_tienda |>
-  filter(hour > ymd_h("2025-11-30 19"))
+  filter(hour > ymd_h("2025-10-31 19"))
 ```
 
 
@@ -274,7 +275,7 @@ filter(hour <= ymd_h("2025-11-30 19"))  # ajusta la hora final si hace falta
 
 # Pronóstico de 1 mes (final)
 
-fc_1mes <- ventas_tienda_full_fit |>
+fc_1mes <- ventas_tienda_fit |>
 forecast(new_data = ventas_tienda_future)
 
 ```
