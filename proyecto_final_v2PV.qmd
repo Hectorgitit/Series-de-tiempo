@@ -13,6 +13,8 @@ format:
     transition-speed: fast
     footer: "Proyecto final Series de Tiempo 2025 · Equipo 6"
     embed-resources: true
+title-slide-attributes:
+  data-background-gradient: "linear-gradient(to bottom, #f0dec4, #fef6e4)"
 execute:
   echo: true
   output-location: column-fragment
@@ -34,21 +36,21 @@ library(fabletools)
 library(fable.prophet)
 ```
 
-## Tienda Delicatessen {background-color="#fef6e4"}
+## Tienda Delicatessen 
 
 Vende principalmente **embutidos** (**carnes frías**) y **quesos** y productos derivados de ello (charolas de carnes frías/quesos, baguettes, etc.).
 
 Tiene horario de lunes a viernes de 10:00 a 19:00 horas y sábados de 10:00 a 15:00 horas (cerrada los domingos).
 
 ```{r}
-load("proyecto_final_complete.RData")
+load("C:/Users/hecto/Downloads/proyecto_final (1).RData")
 datos_tsb
 
 datos_tsb |> 
   autoplot(total)
 ```
 
-## Tratamiento de Datos {background-color="#e3f2fd"}
+## Tratamiento de Datos {background-gradient="linear-gradient(to bottom, #f0dec4, #fef6e4)"}
 
 ```{r}
 ventas <- datos_tsb |>
@@ -70,7 +72,7 @@ ventas |> gg_tsdisplay(total)
 
 ```
 
-#### Comportamiento general
+## Comportamiento general
 
 -   La mayoría de los valores horarios están **entre 0 y 2 000 unidades**.
 
@@ -299,7 +301,7 @@ fc_1mes <- ventas_tienda_fit |>
   forecast(new_data = ventas_tienda_future)
 ```
 
-## Conclusiones {background-gradient="linear-gradient(to bottom, #283b95, #17b2c3)"}
+## Conclusiones {background-gradient="linear-gradient(to bottom, #f0dec4, #fef6e4)"}
 
 Conclusiones \[...\]
 
