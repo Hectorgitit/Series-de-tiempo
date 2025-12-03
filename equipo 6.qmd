@@ -1,0 +1,379 @@
+---
+title: "Proyecto final Series de Tiempo 2025 Otoño Invierno"
+format: 
+  revealjs:
+    theme: solarized          # paleta cálida y distinta al default :contentReference[oaicite:0]{index=0}
+    highlight-style: ayu      # tema de resaltado de código bonito y legible :contentReference[oaicite:1]{index=1}
+    slide-number: c/t         # muestra: slide actual / total :contentReference[oaicite:2]{index=2}
+    scrollable: true
+    incremental: true
+    smaller: true
+    transition: slide         # animación de cambio de diapositiva :contentReference[oaicite:3]{index=3}
+    background-transition: fade
+    transition-speed: fast
+    footer: "Proyecto final Series de Tiempo 2025 · Equipo 6"
+    embed-resources: true
+title-slide-attributes:
+  data-background-gradient: "linear-gradient(to bottom, #f0dec4, #fef6e4)"
+execute:
+  echo: true
+  output-location: column-fragment
+---
+
+```{r}
+#| echo: false
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+library(plotly)
+library(fpp3)
+library(fabletools)
+library(fable.prophet)
+```
+
+## Tienda Delicatessen
+
+Vende principalmente **embutidos** (**carnes frías**) y **quesos** y productos derivados de ello (charolas de carnes frías/quesos, baguettes, etc.).
+
+Tiene horario de lunes a viernes de 10:00 a 19:00 horas y sábados de 10:00 a 15:00 horas (cerrada los domingos).
+
+```{r}
+load("C:/Users/hecto/Downloads/proyecto_final (1).RData")
+datos_tsb
+
+datos_tsb |> 
+  autoplot(total)
+```
+
+## Tratamiento de Datos {background-gradient="linear-gradient(to bottom, #f0dec4, #fef6e4)"}
+
+```{r}
+ventas <- datos_tsb |>
+  mutate(
+    hour = floor_date(fecha, unit = "hour")  # por si hubiera minutos/segundos
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)   # ventas totales por hora
+  )
+ventas |> 
+  tail()
+```
+
+### Tratamiento de Outliers
+
+```{r}
+ventas |> gg_tsdisplay(total)
+
+```
+
+## Comportamiento general
+
+-   La mayoría de los valores horarios están **entre 0 y 2 000 unidades**.
+
+-   Hay **picos extremadamente altos** (20 000, 40 000, 70 000+), lo que indica **outliers claros**
+
+#### Tipo de Outlier
+
+Dada la magnitud y rareza: Son probablemente **aditivos**, es decir valores puntuales anómalos, no parecen cambios estructurales ni patrones recurrentes.
+
+El gráfico ACF tiene un pico muy alto en en lag 1, sugiriendo una estacionalidad horaria alta, de la misma forma en el lag 24; marcando la estacionalidad diaria. Para hacer el tratamiento de outliers se hará una descomposición de la serie utilizando STL, los outliers se determinarán con el componente de residuo con la siguiente lógica:
+
+**Outlier** si se cumple:
+
+Sea $r_t$ el **residuo** en el tiempo t.
+
+Definimos:
+
+-   $Q_1=quantile(r_t,0.25)$
+
+-   $Q_3=quantile(r_t,0.75)$
+
+-   $IQR=Q_3-Q_1$
+
+    Un residuo será considerado **outlier** si está demasiado lejos del rango central $[Q_1,Q_3]$
+
+```{r}
+ventas_stl <- ventas |>
+  model(stl = STL(total ~ season(window = "periodic")))
+
+ventas_stl |>
+  components() |>
+  autoplot()
+
+ventas_stl_components <- components(ventas_stl)
+
+ventas_outliers <- ventas_stl_components |>
+  as_tibble() |>
+  mutate(
+    is_outlier = remainder < quantile(remainder, 0.25) - 3 * IQR(remainder) |
+                 remainder > quantile(remainder, 0.75) + 3 * IQR(remainder)
+  ) |>
+  as_tsibble(index = hour)
+  
+
+
+ventas_outliers |>
+  ggplot(aes(x = hour, y = total, color = is_outlier)) +
+  geom_point()
+
+
+
+```
+
+```{r}
+ventas_clean <- ventas_outliers |>
+  
+  # 1. Quitar los outliers para crear huecos
+  mutate(total = if_else(is_outlier, NA_real_, total)) |>
+  
+  # 2. Asegurar que todos los huecos queden explícitos
+  fill_gaps() |>
+  
+  # 3. Ajustar ARIMA permitiendo NA
+  model(arima = ARIMA(total)) |>
+  
+  # 4. Interpolar usando el modelo
+  interpolate(
+    ventas_outliers |>
+      mutate(total = if_else(is_outlier, NA_real_, total)) |>
+      fill_gaps()
+  ) |>
+  
+  # 5. Convertir a tsibble para poder modificar la columna imputada
+  as_tsibble(index=hour) |>
+  
+  # 6. Reemplazar cualquier valor negativo interpolado por 0
+  mutate(total = pmax(total, 0))
+
+
+ventas_clean |> 
+  autoplot(total)
+
+```
+
+```{r}
+ventas_tienda <- ventas_clean |>
+  mutate(
+    hour = floor_date(hour, unit = "hour")  # por si hubiera minutos/segundos
+  ) |>
+  index_by(hour) |>
+  summarise(
+    total = sum(total)   # ventas totales por hora
+  ) |>
+  mutate(
+    day_type = case_when(
+      wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+      TRUE ~ "Weekday"
+    ),
+    work_day = day_type == "Weekday"
+  )
+
+ventas_tienda
+
+
+split_date <- max(ventas_tienda$hour) - days(30)
+
+ventas_tienda_train <- ventas_tienda |>
+  filter(hour <= split_date)
+
+ventas_tienda_test <- ventas_tienda |>
+  filter(hour > split_date)
+```
+
+### Transformación matemática
+
+```{r}
+ventas_tienda_train <- ventas_tienda_train |>
+  mutate(
+    weekday_dummy = if_else(day_type == "Weekday", 1, 0)
+  )
+ventas_tienda_test <- ventas_tienda_test |>
+  mutate(
+    weekday_dummy = if_else(day_type == "Weekday", 1, 0)
+  )
+
+```
+
+```{r}
+ventas_tienda_train |> 
+  gg_tsdisplay(total, plot_type = "partial")
+```
+
+```{r}
+ventas_tienda_fit <- ventas_tienda_train |> 
+  model(
+    tslm = TSLM(log(total + 1) ~ trend() + season()),
+    tslm2 = TSLM(log(total + 1) ~ trend() + season("day") + weekday_dummy + work_day),
+    tslm3 = TSLM(log(total + 1) ~ trend() +fourier(K = 3) + weekday_dummy + work_day + 
+    lag(log(total + 1), 24)+lag(log(total+1), 168)),
+    
+    stl_dcmp = decomposition_model(
+      STL(log(total + 1) ~ season(window = "periodic")),    
+      TSLM(season_adjust ~ trend()),                
+      SNAIVE(season_year)    # explicitamos SNAIVE para la componente seasonal
+    ),
+    
+    stl_dcmp2 = decomposition_model(
+      STL(log(total + 1) ~ season(window = "periodic")),    
+      TSLM(season_adjust ~ trend() + weekday_dummy + work_day),                
+      SNAIVE(season_year)    # explicitamos SNAIVE para la componente seasonal
+    ),
+
+    # 3) SNAIVE: benchmark estacional sobre la serie original
+    snaive = SNAIVE(total),
+
+    # 4) ETS: modelo ETS automático (selección por AICc)
+    ets = ETS(total),
+    
+    # 5) benchmark
+    benchmark = decomposition_model(
+      STL(log(total + 1) ~ season("day") + season("week"), robust = TRUE),
+      MEAN(season_adjust)
+    ),
+    
+    # 6) STL + ETS
+    stl_ets = decomposition_model(
+      STL(log(total + 1) ~ season(window = "week")),
+      ETS(season_adjust),
+      SNAIVE(season_year)
+    ),
+
+    # 6) Prophet
+    prophet_mod = fable.prophet::prophet(
+      total ~ season("day") + season("week")
+    ),
+    
+    naive  = NAIVE(total + 1),     # caminata aleatoria
+    snaive = SNAIVE(total + 1),   # caminata aleatoria estacional
+    
+    stl_arima_robusto = decomposition_model(
+      STL(total ~ season(window = "periodic"), robust = TRUE),
+      ARIMA(season_adjust ~ PDQ(0, 0, 0) + pdq(d=1)),
+      SNAIVE(season_year)
+    ),
+  )
+```
+
+### Forecast
+
+```{r}
+fc <- ventas_tienda_fit |> 
+  forecast(new_data = ventas_tienda_test)
+```
+
+### Métricas de Desempeño
+
+```{r}
+fc |> 
+  accuracy(ventas_tienda_test) |> 
+  arrange(MAE)
+```
+
+### Visualización
+
+```{r}
+p <- fc |> 
+  autoplot(ventas_tienda_test,level = NULL) 
+
+plotly::ggplotly(p)
+
+```
+
+```{r}
+# 1. IMPORTANTE: Usamos el fin del ENTRENAMIENTO como referencia, no el dataset completo
+ultimo_dato_train <- max(ventas_tienda_train$hour) 
+
+# 2. Definimos hasta cuándo queremos pronosticar
+fin_noviembre <- ymd_h("2025-11-30 19")
+
+# 3. Calculamos las horas desde el fin del TRAIN hasta fin de noviembre
+h_ventas <- as.numeric(difftime(fin_noviembre, ultimo_dato_train, units = "hours"))
+
+# 4. Generamos new_data usando 'ventas_tienda_train' para asegurar continuidad
+ventas_tienda_future <- new_data(ventas_tienda_train, n = h_ventas + 10) |>
+  mutate(
+    # Recalculamos tus dummies igual que antes
+    day_type = case_when(
+      wday(hour, week_start = 1) %in% c(6, 7) ~ "Weekend",
+      TRUE ~ "Weekday"
+    ),
+    work_day = day_type == "Weekday",
+    weekday_dummy = if_else(day_type == "Weekday", 1, 0)
+  )
+
+# 5. Forecast
+fc_1mes <- ventas_tienda_fit |>
+  dplyr::select(-tslm3) |> 
+  forecast(new_data = ventas_tienda_future)
+```
+
+## Conclusiones {background-gradient="linear-gradient(to bottom, #f0dec4, #fef6e4)"}
+
+\[\En este proyecto desarrollamos un flujo completo de pronóstico para las ventas horarias de la Tienda Delicatessen, comenzando con el tratamiento de outliers mediante una descomposición STL robusta e interpolación, y continuando con la construcción de una tsibble horaria enriquecida con variables de calendario. A partir de esta serie limpia, ajustamos y comparamos diversos modelos de referencia (MEAN, NAIVE, SNAIVE), modelos ETS y modelos basados en descomposición estacional y regresión.
+
+Tras evaluar el desempeño de todos los modelos mediante el MAE en el conjunto de prueba, seleccionamos como modelo final stl_arima_robusto, ya que fue el que obtuvo el MAE más bajo entre las alternativas consideradas. Con este modelo generamos el pronóstico horario para noviembre de 2025 y construimos la tabla final de pronósticos, cumpliendo con los entregables y criterios establecidos para el proyecto.\]
+
+### Exportación del modelo
+
+```{r}
+equipo_6 <- fc_1mes |>
+  filter(.model == "stl_arima_robusto") |> 
+  filter_index("2025-11-01" ~ "2025-11-30")
+  
+head(equipo_6)
+tail(equipo_6)
+save(equipo_6, file = "fc_equipo_6.RData")
+```
+
+```{r}
+# Exportación del modelo
+equipo_6 <- fc_1mes |>
+  filter(.model == "stl_arima_robusto") |>
+  filter_index("2025-11-01" ~ "2025-11-30") |>
+  as_tibble() |>
+  mutate(
+    .model = "equipo_6",    
+    .mean = pmax(.mean, 0),
+    total = distributional::dist_normal(.mean, distributional::variance(total)^0.5)
+  ) |>
+  as_fable(
+    index = hour,
+    key = .model,
+    distribution = total,
+    response = "total"
+  )
+
+
+
+head(equipo_6)
+tail(equipo_6)
+
+save(equipo_6, file = "fc_equipo_6.RData")
+```
+
+```{r}
+equipo_6
+```
+
+```{r}
+fecha_inicio_grafica <- max(ventas_tienda$hour) - years(1)
+
+equipo_6 |> 
+  autoplot(
+    ventas_tienda |> filter(hour >= fecha_inicio_grafica), 
+    level = 80
+  ) +
+  labs(
+    title = "Pronóstico de Ventas: Noviembre 2025 (y último año histórico)",
+    y = "Ventas Totales",
+    x = "Fecha"
+  ) +
+  scale_x_datetime(date_labels = "%b %Y") +
+  coord_cartesian(ylim = c(0, NA))
+```
